@@ -43,3 +43,19 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Environment variables and API keys
+.env
+.env.local
+.env.*.local
+
+# Firebase and Google Services configuration
+android/app/google-services.json
+ios/Runner/GoogleService-Info.plist
+web/google-services.json
+
+# iOS sensitive files
+ios/Runner/GeneratedPluginRegistrant.h
+ios/Runner/GeneratedPluginRegistrant.m
+ios/Pods/
+ios/Podfile.lock
