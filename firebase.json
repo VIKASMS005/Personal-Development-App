@@ -1,0 +1,32 @@
+{
+  "auth": {
+    "providers": {
+      "anonymous": true,
+      "emailPassword": true
+    }
+  },
+  "firestore": {
+    "rules": "firestore.rules"
+  },
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "personal-development-app-60f48",
+          "appId": "1:110348386710:android:336827f8b5e81dc44a9db7",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "personal-development-app-60f48",
+          "configurations": {
+            "android": "1:110348386710:android:336827f8b5e81dc44a9db7",
+            "ios": "1:110348386710:ios:e8af09b8e0d9c0524a9db7",
+            "web": "1:110348386710:web:73131890f4878e7e4a9db7"
+          }
+        }
+      }
+    }
+  }
+}
