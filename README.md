@@ -34,7 +34,6 @@ The Personal Development App combines daily planning, habit tracking, mental wel
 ```text
 Personal Development App/
 ├── README.md
-├── LICENSE
 ├── .gitignore
 ├── flutter_application_1/
 │   ├── android/
@@ -136,10 +135,6 @@ Contributions are welcome. If you would like to improve the app:
 2. Create a feature branch
 3. Commit your changes
 4. Open a pull request
-
-## License
-
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
 
 ## Author
 
