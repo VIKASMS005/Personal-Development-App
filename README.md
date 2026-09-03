@@ -1,147 +1,188 @@
 # Personal Development App
 
-A smart and focused Flutter mobile app designed to help users build better routines, stay disciplined, and improve personal growth through productivity, reflection, health, and learning tools.
+A Flutter mobile application for personal development and productivity, built with Firebase backend support.
 
-## Overview
+## 📱 Features
 
-The Personal Development App combines daily planning, habit tracking, mental wellness, personal finance tracking, and AI-assisted guidance in one place. It is built for users who want a practical dashboard for managing their life more intentionally.
+- User authentication with Google Sign-In
+- Firebase Cloud Firestore integration for real-time data
+- Push notifications with Firebase Cloud Messaging
+- Image picking and storage
+- Offline support with local caching
+- Cross-platform support (Android, iOS, Web)
+- Responsive UI design
 
-## Key Features
+## 🛠️ Prerequisites
 
-- Habit tracking and streak monitoring
-- Todo and task planning with reminders
-- Journal and personal reflection entries
-- Finance tracking and expense insights
-- Timetable and daily scheduling
-- AI coach/chatbot support for motivation and productivity tips
-- Alarm and reminder notifications
-- Wellness/step tracking and screen-time monitoring
-- Offline-first local data storage with SQLite
-- Clean, modern interface with light/dark theme support
+Before you begin, ensure you have installed:
 
-## Tech Stack
+- **Flutter SDK** (version 3.0 or higher)
+  - Download from [flutter.dev](https://flutter.dev)
+- **Dart** (comes with Flutter)
+- **Android Studio** or **Xcode** (for mobile development)
+- **Git** (for version control)
 
-- Flutter
-- Dart
-- Provider for state management
-- SQLite for local persistence
-- Google Generative AI integration
-- Flutter local notifications
-- SharedPreferences and path-based storage support
+## 📦 Installation
 
-## Project Structure
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/VIKASMS005/Personal-Development-App.git
+   cd Personal-Development-App/flutter_application_1
+   ```
 
-```text
-Personal Development App/
-├── README.md
-├── .gitignore
-├── flutter_application_1/
-│   ├── android/
-│   ├── ios/
-│   ├── lib/
-│   ├── web/
-│   ├── windows/
-│   ├── linux/
-│   ├── macos/
-│   ├── pubspec.yaml
-│   ├── .env.example
-│   ├── SETUP.md
-│   └── README.md
-└── .vscode/
-```
+2. **Set up environment variables:**
+   ```bash
+   cp .env.example .env
+   ```
+   Edit `.env` and add your Firebase credentials and API keys
 
-## Getting Started
+   See [SETUP.md](SETUP.md) for detailed environment setup instructions.
 
-### 1) Clone the repository
+3. **Get Flutter dependencies:**
+   ```bash
+   flutter pub get
+   ```
 
-```bash
-git clone https://github.com/VIKASMS005/Personal-Development-App.git
-cd Personal-Development-App
-```
+4. **Configure Firebase:**
+   - Download `google-services.json` from Firebase Console and place in `android/app/`
+   - Download `GoogleService-Info.plist` and add to iOS Runner project in Xcode
 
-### 2) Install dependencies
+## 🚀 Running the App
 
-```bash
-cd flutter_application_1
-flutter pub get
-```
-
-### 3) Configure environment variables
-
-Copy the example environment file and add your API key:
-
-```bash
-cp .env.example .env
-```
-
-Then edit the `.env` file and add your Gemini API key:
-
-```env
-GEMINI_API_KEY=your_gemini_api_key_here
-```
-
-### 4) Run the app
-
-#### Android
-
+### Run on Android:
 ```bash
 flutter run -d android
 ```
 
-#### Web
-
-```bash
-flutter run -d chrome
-```
-
-#### iOS
-
+### Run on iOS:
 ```bash
 flutter run -d ios
 ```
 
-## Environment and Setup Notes
+### Run on Web:
+```bash
+flutter run -d chrome
+```
 
-- Keep the `.env` file local and never commit it to source control.
-- Firebase and platform config files are also excluded from git tracking.
-- For detailed setup and environment instructions, refer to `flutter_application_1/SETUP.md`.
+### Run with a specific device:
+```bash
+flutter devices  # List all available devices
+flutter run -d <device_id>
+```
 
-## Features in Detail
+## 📁 Project Structure
 
-### Productivity
-- Todo management
-- Goal-oriented planning
-- Daily schedule and time blocking
+```
+flutter_application_1/
+├── lib/
+│   ├── main.dart              # App entry point
+│   ├── constants/             # App constants and configuration
+│   ├── models/                # Data models
+│   ├── providers/             # State management (Provider pattern)
+│   ├── screens/               # UI screens/pages
+│   ├── services/              # Business logic and API services
+│   ├── utils/                 # Utility functions and helpers
+│   └── widgets/               # Reusable widgets
+├── android/                   # Android native code
+├── ios/                       # iOS native code
+├── web/                       # Web platform code
+├── pubspec.yaml               # Flutter dependencies
+├── .env.example               # Environment variables template
+├── SETUP.md                   # Environment setup guide
+└── README.md                  # This file
+```
 
-### Personal Growth
-- Habit streaks and consistency tracking
-- Reflection journaling
-- AI-based coaching guidance
+## 🔒 Security
 
-### Wellness
-- Step tracking
-- Screen-time insights
-- Daily reminders and health-focused alerts
+- **API Keys**: Never commit sensitive data. Use `.env` file for local configuration.
+- **Firebase Config**: `google-services.json` and `GoogleService-Info.plist` are in `.gitignore`
+- **Environment Variables**: Create `.env` from `.env.example` locally
 
-### Financial Awareness
-- Expense tracking
-- Budget and balance overview
+For detailed security setup, see [SETUP.md](SETUP.md).
 
-## Contributing
+## 📚 Dependencies
 
-Contributions are welcome. If you would like to improve the app:
+Main packages used:
+- **firebase_core** - Firebase initialization
+- **cloud_firestore** - Realtime database
+- **firebase_auth** - Authentication
+- **firebase_messaging** - Push notifications
+- **google_sign_in** - Google authentication
+- **provider** - State management
+- **image_picker** - Image selection
+- **flutter_local_notifications** - Local notifications
+- **connectivity_plus** - Network connectivity
 
-1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Open a pull request
+See `pubspec.yaml` for the complete list of dependencies.
 
-## Author
+## 🔧 Development
 
-VIKASMS005
+### Hot Reload (while app is running):
+```bash
+Press 'r' in terminal to hot reload
+Press 'R' to hot restart
+```
 
-GitHub: https://github.com/VIKASMS005
+### Run Tests:
+```bash
+flutter test
+```
 
-## Repository
+### Build Release APK (Android):
+```bash
+flutter build apk --release
+```
 
-https://github.com/VIKASMS005/Personal-Development-App
+### Build Release IPA (iOS):
+```bash
+flutter build ios --release
+```
+
+## 📝 Environment Variables
+
+The app uses `.env` file for configuration. See `.env.example` for all required variables:
+
+- Firebase credentials
+- Google Sign-In credentials
+- API keys
+- App environment settings
+- Debug mode configuration
+
+## 🤝 Contributing
+
+Contributions are welcome! Please:
+
+1. Create a feature branch: `git checkout -b feature/your-feature`
+2. Commit your changes: `git commit -m 'Add your feature'`
+3. Push to the branch: `git push origin feature/your-feature`
+4. Open a Pull Request
+
+## 🐛 Known Issues
+
+- None currently reported
+
+Please report any bugs you find!
+
+## 📄 License
+
+This project is private. Contact the owner for usage rights.
+
+## 👤 Author
+
+**VIKASMS005**
+
+- GitHub: [@VIKASMS005](https://github.com/VIKASMS005)
+- Repository: [Personal-Development-App](https://github.com/VIKASMS005/Personal-Development-App)
+
+## 📞 Support
+
+For support, please open an issue on the GitHub repository.
+
+## 🔄 Next Steps
+
+1. Configure Firebase in your project
+2. Set up your `.env` file with credentials
+3. Install dependencies with `flutter pub get`
+4. Run the app with `flutter run`
+
+Happy coding! 🎉
