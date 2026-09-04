@@ -16,13 +16,19 @@ class StepsScreen extends StatefulWidget {
 class _StepsScreenState extends State<StepsScreen> {
   int _selectedPeriod = 0; // 0=Day, 1=Month, 2=Year, 3=All-Time
 
-  DateTime _selectedDate = DateTime.now();
-  int _selectedMonth = DateTime.now().month;
-  int _selectedYear = DateTime.now().year;
+  DateTime _normalizeDate(DateTime dt) => DateTime(dt.year, dt.month, dt.day);
+
+  late DateTime _selectedDate;
+  late int _selectedMonth;
+  late int _selectedYear;
 
   @override
   void initState() {
     super.initState();
+    final today = _normalizeDate(DateTime.now());
+    _selectedDate = today;
+    _selectedMonth = today.month;
+    _selectedYear = today.year;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final auth = context.read<AuthProvider>();
       if (auth.uid != null) {
@@ -94,17 +100,20 @@ class _StepsScreenState extends State<StepsScreen> {
   }
 
   Future<void> _pickDate() async {
+    final today = _normalizeDate(DateTime.now());
+    final initial = _normalizeDate(_selectedDate).isAfter(today) ? today : _normalizeDate(_selectedDate);
     final picked = await showDatePicker(
       context: context,
-      initialDate: _selectedDate,
+      initialDate: initial,
       firstDate: DateTime(2020),
-      lastDate: DateTime.now(),
+      lastDate: today,
     );
     if (picked != null) {
+      final norm = _normalizeDate(picked);
       setState(() {
-        _selectedDate = picked;
-        _selectedMonth = picked.month;
-        _selectedYear = picked.year;
+        _selectedDate = norm.isAfter(today) ? today : norm;
+        _selectedMonth = _selectedDate.month;
+        _selectedYear = _selectedDate.year;
       });
     }
   }
@@ -115,6 +124,20 @@ class _StepsScreenState extends State<StepsScreen> {
     final isDark = theme.brightness == Brightness.dark;
     final auth = context.watch<AuthProvider>();
     final stepProv = context.watch<StepProvider>();
+
+    // Safety guard: Clamp selected date to today (guards against overnight rollover or stale state)
+    final today = _normalizeDate(DateTime.now());
+    if (_normalizeDate(_selectedDate).isAfter(today)) {
+      _selectedDate = today;
+      _selectedMonth = today.month;
+      _selectedYear = today.year;
+    }
+    if (_selectedYear > today.year) {
+      _selectedYear = today.year;
+      _selectedMonth = today.month;
+    } else if (_selectedYear == today.year && _selectedMonth > today.month) {
+      _selectedMonth = today.month;
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -187,13 +210,33 @@ class _StepsScreenState extends State<StepsScreen> {
 
               // 3. Main Analytics Content
               Expanded(
-                child: _selectedPeriod == 0
-                    ? _buildSpecificDayView(theme, isDark, stepProv)
-                    : _selectedPeriod == 1
-                        ? _buildSpecificMonthView(theme, isDark, stepProv)
-                        : _selectedPeriod == 2
-                            ? _buildSpecificYearView(theme, isDark, stepProv)
-                            : _buildAllTimeView(theme, isDark, stepProv),
+                child: RefreshIndicator(
+                  color: AppColors.primary,
+                  onRefresh: () async {
+                    try {
+                      final uid = auth.uid ?? 'local_user';
+                      final isToday = _normalizeDate(_selectedDate) == _normalizeDate(DateTime.now());
+
+                      if (_selectedPeriod == 0 && isToday) {
+                        // On today: force hardware sensor flush, baseline difference recalculation, and SQLite update
+                        await stepProv.refreshStepData(uid);
+                      } else {
+                        // Historical date, month, year, or all-time: reload SQLite database records
+                        // Note: _selectedDate, _selectedMonth, _selectedYear are strictly preserved!
+                        await stepProv.loadStepData(uid);
+                      }
+                    } catch (e) {
+                      debugPrint('[StepsScreen] Refresh error: $e');
+                    }
+                  },
+                  child: _selectedPeriod == 0
+                      ? _buildSpecificDayView(theme, isDark, stepProv)
+                      : _selectedPeriod == 1
+                          ? _buildSpecificMonthView(theme, isDark, stepProv)
+                          : _selectedPeriod == 2
+                              ? _buildSpecificYearView(theme, isDark, stepProv)
+                              : _buildAllTimeView(theme, isDark, stepProv),
+                ),
               ),
             ],
           ),
@@ -228,13 +271,22 @@ class _StepsScreenState extends State<StepsScreen> {
   }
 
   Widget _buildDateSelectorBar(ThemeData theme, bool isDark) {
-    String label = '';
-    final now = DateTime.now();
+    final today = _normalizeDate(DateTime.now());
+    final selectedDay = _normalizeDate(_selectedDate);
 
+    bool canGoNext = false;
     if (_selectedPeriod == 0) {
-      final isToday = _selectedDate.year == now.year &&
-          _selectedDate.month == now.month &&
-          _selectedDate.day == now.day;
+      canGoNext = selectedDay.isBefore(today);
+    } else if (_selectedPeriod == 1) {
+      canGoNext = (_selectedYear < today.year) ||
+          (_selectedYear == today.year && _selectedMonth < today.month);
+    } else if (_selectedPeriod == 2) {
+      canGoNext = _selectedYear < today.year;
+    }
+
+    String label = '';
+    if (_selectedPeriod == 0) {
+      final isToday = selectedDay == today;
       label = isToday
           ? 'Today (${DateFormat('MMM d, yyyy').format(_selectedDate)})'
           : DateFormat('EEEE, MMM d, yyyy').format(_selectedDate);
@@ -257,10 +309,11 @@ class _StepsScreenState extends State<StepsScreen> {
         children: [
           IconButton(
             icon: const Icon(Icons.chevron_left_rounded, size: 24),
+            tooltip: 'Previous',
             onPressed: () {
               setState(() {
                 if (_selectedPeriod == 0) {
-                  _selectedDate = _selectedDate.subtract(const Duration(days: 1));
+                  _selectedDate = DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day - 1);
                   _selectedMonth = _selectedDate.month;
                   _selectedYear = _selectedDate.year;
                 } else if (_selectedPeriod == 1) {
@@ -295,30 +348,34 @@ class _StepsScreenState extends State<StepsScreen> {
           ),
           IconButton(
             icon: const Icon(Icons.chevron_right_rounded, size: 24),
-            onPressed: () {
-              setState(() {
-                if (_selectedPeriod == 0) {
-                  if (_selectedDate.isBefore(now)) {
-                    _selectedDate = _selectedDate.add(const Duration(days: 1));
-                    _selectedMonth = _selectedDate.month;
-                    _selectedYear = _selectedDate.year;
+            tooltip: canGoNext ? 'Next' : null,
+            onPressed: canGoNext
+                ? () {
+                    setState(() {
+                      if (_selectedPeriod == 0) {
+                        final nextDay = DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day + 1);
+                        if (!_normalizeDate(nextDay).isAfter(today)) {
+                          _selectedDate = nextDay;
+                          _selectedMonth = _selectedDate.month;
+                          _selectedYear = _selectedDate.year;
+                        }
+                      } else if (_selectedPeriod == 1) {
+                        if (_selectedYear < today.year || (_selectedYear == today.year && _selectedMonth < today.month)) {
+                          if (_selectedMonth == 12) {
+                            _selectedMonth = 1;
+                            _selectedYear++;
+                          } else {
+                            _selectedMonth++;
+                          }
+                        }
+                      } else if (_selectedPeriod == 2) {
+                        if (_selectedYear < today.year) {
+                          _selectedYear++;
+                        }
+                      }
+                    });
                   }
-                } else if (_selectedPeriod == 1) {
-                  if (_selectedYear < now.year || (_selectedYear == now.year && _selectedMonth < now.month)) {
-                    if (_selectedMonth == 12) {
-                      _selectedMonth = 1;
-                      _selectedYear++;
-                    } else {
-                      _selectedMonth++;
-                    }
-                  }
-                } else if (_selectedPeriod == 2) {
-                  if (_selectedYear < now.year) {
-                    _selectedYear++;
-                  }
-                }
-              });
-            },
+                : null,
           ),
         ],
       ),
@@ -328,16 +385,16 @@ class _StepsScreenState extends State<StepsScreen> {
   // ─── 1. Specific Day View ──────────────────────────────────────────────────
 
   Widget _buildSpecificDayView(ThemeData theme, bool isDark, StepProvider stepProv) {
+    final today = _normalizeDate(DateTime.now());
+    final isToday = _normalizeDate(_selectedDate) == today;
     final dateStr = DateFormat('yyyy-MM-dd').format(_selectedDate);
     final history = stepProv.historyRecords;
-    final record = history.firstWhere(
-      (r) => r.date == dateStr,
-      orElse: () => _selectedDate.day == DateTime.now().day &&
-              _selectedDate.month == DateTime.now().month &&
-              _selectedDate.year == DateTime.now().year
-          ? (stepProv.todayRecord ?? StepRecord(date: dateStr, stepCount: 0, goal: stepProv.dailyGoal))
-          : StepRecord(date: dateStr, stepCount: 0, goal: stepProv.dailyGoal),
-    );
+    final record = isToday && stepProv.todayRecord != null
+        ? stepProv.todayRecord!
+        : history.firstWhere(
+            (r) => r.date == dateStr,
+            orElse: () => StepRecord(date: dateStr, stepCount: 0, goal: stepProv.dailyGoal),
+          );
 
     final steps = record.stepCount;
     final goal = record.goal;
@@ -347,6 +404,7 @@ class _StepsScreenState extends State<StepsScreen> {
     final mins = record.activeMinutes;
 
     return ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 80),
       children: [
         // Circular Progress Hero Card
@@ -480,6 +538,12 @@ class _StepsScreenState extends State<StepsScreen> {
         dailyMap[r.date] = r;
       }
     }
+
+    final todayStr = DateFormat('yyyy-MM-dd').format(DateTime.now());
+    if (stepProv.todayRecord != null && todayStr.startsWith(prefix)) {
+      dailyMap[todayStr] = stepProv.todayRecord!;
+    }
+
     final monthRecords = dailyMap.values.toList()
       ..sort((a, b) => b.date.compareTo(a.date));
 
@@ -490,6 +554,7 @@ class _StepsScreenState extends State<StepsScreen> {
     final totalKm = monthRecords.fold(0.0, (sum, r) => sum + r.distanceKm);
 
     return ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.all(16),
       children: [
         Row(
@@ -615,10 +680,24 @@ class _StepsScreenState extends State<StepsScreen> {
     final yearPrefix = '$_selectedYear-';
     final yearRecords = history.where((r) => r.date.startsWith(yearPrefix)).toList();
 
+    final todayStr = DateFormat('yyyy-MM-dd').format(DateTime.now());
+    final List<StepRecord> effectiveYearRecords = [];
+    final seenDates = <String>{};
+    if (stepProv.todayRecord != null && todayStr.startsWith(yearPrefix)) {
+      effectiveYearRecords.add(stepProv.todayRecord!);
+      seenDates.add(todayStr);
+    }
+    for (final r in yearRecords) {
+      if (!seenDates.contains(r.date)) {
+        effectiveYearRecords.add(r);
+        seenDates.add(r.date);
+      }
+    }
+
     // 12 months data
     final List<int> monthlyTotals = List.generate(12, (m) {
       final monthStr = '$_selectedYear-${(m + 1).toString().padLeft(2, '0')}';
-      return yearRecords
+      return effectiveYearRecords
           .where((r) => r.date.startsWith(monthStr))
           .fold(0, (sum, r) => sum + r.stepCount);
     });
@@ -637,6 +716,7 @@ class _StepsScreenState extends State<StepsScreen> {
     final bestMonthName = DateFormat('MMMM').format(DateTime(_selectedYear, bestMonthIdx + 1));
 
     return ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.all(16),
       children: [
         // Year Summary Card
@@ -752,6 +832,7 @@ class _StepsScreenState extends State<StepsScreen> {
 
   Widget _buildAllTimeView(ThemeData theme, bool isDark, StepProvider stepProv) {
     return ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.all(16),
       children: [
         Container(

@@ -8,6 +8,7 @@ import android.database.sqlite.SQLiteDatabase
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
+import android.hardware.SensorEventListener2
 import android.hardware.SensorManager
 import android.os.Build
 import androidx.core.content.ContextCompat
@@ -47,23 +48,30 @@ class DailyStepWorker(
 
             val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
                 ?: return@withContext Result.success()
-            val stepSensor = sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
+            val stepSensor = sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER, true)
+                ?: sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
                 ?: return@withContext Result.success()
 
             // Fetch live hardware step count using flush + CountDownLatch
             var rawSteps = 0L
             val latch = CountDownLatch(1)
-            val listener = object : SensorEventListener {
+            val listener = object : SensorEventListener2 {
                 override fun onSensorChanged(event: SensorEvent?) {
                     if (event != null && event.sensor.type == Sensor.TYPE_STEP_COUNTER) {
-                        rawSteps = event.values[0].toLong()
-                        latch.countDown()
+                        val count = event.values[0].toLong()
+                        if (count > 0L) {
+                            rawSteps = count
+                            latch.countDown()
+                        }
                     }
                 }
                 override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+                override fun onFlushCompleted(sensor: Sensor?) {
+                    latch.countDown()
+                }
             }
 
-            sensorManager.registerListener(listener, stepSensor, SensorManager.SENSOR_DELAY_NORMAL)
+            sensorManager.registerListener(listener, stepSensor, SensorManager.SENSOR_DELAY_NORMAL, 5_000_000)
             try {
                 sensorManager.flush(listener)
             } catch (_: Exception) {}

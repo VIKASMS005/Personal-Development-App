@@ -512,6 +512,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           await auth.resetAllLocalData();
                           if (context.mounted) {
                             final uid = auth.uid ?? 'local_user';
+                            context.read<ProfileProvider>().clear();
+                            context.read<TodoProvider>().clear();
+                            context.read<HabitProvider>().clear();
+                            context.read<JournalProvider>().clear();
+                            context.read<FinanceProvider>().clear();
+                            context.read<CalendarProvider>().clear();
+                            context.read<TimetableProvider>().clear();
+                            context.read<ChatbotProvider>().clear();
+                            context.read<ReminderProvider>().clear();
+                            context.read<AlarmProvider>().clear();
+                            context.read<StepProvider>().clear();
+
                             context.read<ProfileProvider>().loadProfile(uid);
                             context.read<TodoProvider>().loadTodos(uid);
                             context.read<HabitProvider>().loadHabits(uid);
@@ -522,6 +534,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             context.read<ChatbotProvider>().loadMessages(uid);
                             context.read<ReminderProvider>().loadReminders(uid);
                             context.read<AlarmProvider>().loadAlarms(uid);
+                            context.read<StepProvider>().loadStepData(uid);
 
                             ScaffoldMessenger.of(context).clearSnackBars();
                             ScaffoldMessenger.of(context).showSnackBar(

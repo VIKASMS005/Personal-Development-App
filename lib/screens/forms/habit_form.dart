@@ -41,7 +41,7 @@ class _HabitFormState extends State<HabitForm> {
     if (!_form.currentState!.validate()) return;
     final h = Habit(
       id: widget.initial?.id,
-      uid: widget.initial?.uid ?? '',   // ← preserve original uid so DB record is found on reload
+      uid: widget.initial?.uid ?? 'local_user',
       title: _titleC.text.trim(),
       frequency: _freq,
       history: widget.initial?.history,

@@ -111,7 +111,7 @@ class _ReminderFormState extends State<ReminderForm> {
 
     final reminder = Reminder(
       id: widget.initialReminder?.id,
-      uid: widget.initialReminder?.uid ?? '',
+      uid: widget.initialReminder?.uid ?? 'local_user',
       title: _titleCtrl.text.trim(),
       description: _descCtrl.text.trim(),
       dateTime: fullDateTime,

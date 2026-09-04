@@ -254,8 +254,10 @@ class _CalendarScreenState extends State<CalendarScreen> {
         ],
       ),
     );
+    final enteredName = name;
+    titleCtrl.dispose();
 
-    if (name == null || name.isEmpty || !mounted) return;
+    if (enteredName == null || enteredName.isEmpty || !mounted) return;
 
     final dt = DateTime(
       picked.year,
@@ -267,7 +269,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
 
     final event = CalendarEvent(
       uid: uid,
-      title: name,
+      title: enteredName,
       dateTime: dt,
     );
 

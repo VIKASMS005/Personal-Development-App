@@ -22,6 +22,7 @@ class JournalForm extends StatefulWidget {
 
 class _JournalFormState extends State<JournalForm> {
   final _form = GlobalKey<FormState>();
+  late TextEditingController _titleC;
   late TextEditingController _textC;
   late TextEditingController _tagsC;
   String _selectedMood = 'calm';
@@ -38,6 +39,7 @@ class _JournalFormState extends State<JournalForm> {
   @override
   void initState() {
     super.initState();
+    _titleC = TextEditingController(text: widget.initial?.title ?? '');
     _textC = TextEditingController(text: widget.initial?.text ?? '');
     _tagsC = TextEditingController(text: widget.initial?.tags.join(', ') ?? '');
     _selectedMood = widget.initial?.mood ?? 'calm';
@@ -45,6 +47,7 @@ class _JournalFormState extends State<JournalForm> {
 
   @override
   void dispose() {
+    _titleC.dispose();
     _textC.dispose();
     _tagsC.dispose();
     super.dispose();
@@ -61,7 +64,8 @@ class _JournalFormState extends State<JournalForm> {
 
     final entry = JournalEntry(
       id: widget.initial?.id,
-      uid: widget.initial?.uid ?? '',   // ← CRITICAL: preserve original uid so DB record is found on reload
+      uid: widget.initial?.uid ?? 'local_user',
+      title: _titleC.text.trim(),
       text: _textC.text.trim(),
       mood: _selectedMood,
       tags: tags,
@@ -121,13 +125,25 @@ class _JournalFormState extends State<JournalForm> {
             ),
             const SizedBox(height: 16),
             TextFormField(
-              controller: _textC,
-              maxLines: 6,
+              controller: _titleC,
+              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
               decoration: const InputDecoration(
+                labelText: 'Title',
+                hintText: 'e.g. Breakthrough in Focus, Evening Reflection',
+                prefixIcon: Icon(Icons.title_rounded),
+              ),
+              validator: (v) => v == null || v.trim().isEmpty ? 'Please enter a title' : null,
+            ),
+            const SizedBox(height: 14),
+            TextFormField(
+              controller: _textC,
+              maxLines: 5,
+              decoration: const InputDecoration(
+                labelText: 'Description',
                 hintText: 'What went well today? What did you learn?',
                 alignLabelWithHint: true,
               ),
-              validator: (v) => v == null || v.trim().isEmpty ? 'Entry cannot be empty' : null,
+              validator: (v) => v == null || v.trim().isEmpty ? 'Description cannot be empty' : null,
             ),
             const SizedBox(height: 14),
             TextFormField(

@@ -104,7 +104,7 @@ class _TodoFormState extends State<TodoForm> {
 
     final t = Todo(
       id: widget.initial?.id,
-      uid: widget.initial?.uid ?? '',   // ← CRITICAL: preserve original uid so DB record is found on reload
+      uid: widget.initial?.uid ?? 'local_user',
       title: _titleC.text.trim(),
       description: _descC.text.trim(),
       category: _category,

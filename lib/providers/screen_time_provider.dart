@@ -57,8 +57,23 @@ class ScreenTimeProvider extends ChangeNotifier {
     return ((thisSec - lastSec) / lastSec) * 100.0;
   }
 
-  Future<void> loadScreenTime() async {
+  Future<void> loadScreenTime({bool isResume = false}) async {
     if (!Platform.isAndroid) return;
+
+    if (isResume && _weeklySummaries.isNotEmpty && _prevWeeklySummaries.isNotEmpty) {
+      try {
+        _todaySummary = await _service.getTodayUsage();
+        final todayStr = DateTime.now().toIso8601String().split('T')[0];
+        final idx = _weeklySummaries.indexWhere((s) => s.date == todayStr);
+        if (idx != -1 && _todaySummary != null) {
+          _weeklySummaries[idx] = _todaySummary!;
+          notifyListeners();
+          return;
+        }
+      } catch (e) {
+        debugPrint('ScreenTimeProvider fast-resume error: $e');
+      }
+    }
 
     _isLoading = true;
     notifyListeners();

@@ -4,6 +4,7 @@ import 'package:uuid/uuid.dart';
 class JournalEntry {
   String id;
   String uid;
+  String title;
   String text;
   String mood; // 'happy', 'calm', 'neutral', 'sad', 'stressed', 'energetic'
   List<String> tags;
@@ -15,6 +16,7 @@ class JournalEntry {
   JournalEntry({
     String? id,
     this.uid = '',
+    this.title = '',
     required this.text,
     this.mood = 'calm',
     this.tags = const [],
@@ -29,6 +31,7 @@ class JournalEntry {
   JournalEntry copyWith({
     String? id,
     String? uid,
+    String? title,
     String? text,
     String? mood,
     List<String>? tags,
@@ -41,6 +44,7 @@ class JournalEntry {
     return JournalEntry(
       id: id ?? this.id,
       uid: uid ?? this.uid,
+      title: title ?? this.title,
       text: text ?? this.text,
       mood: mood ?? this.mood,
       tags: tags ?? this.tags,
@@ -54,6 +58,7 @@ class JournalEntry {
   Map<String, dynamic> toMap() => {
         'id': id,
         'uid': uid,
+        'title': title,
         'text': text,
         'mood': mood,
         'tags': tags,
@@ -65,6 +70,7 @@ class JournalEntry {
   Map<String, dynamic> toSqliteMap() => {
         'id': id,
         'uid': uid,
+        'title': title,
         'text': text,
         'mood': mood,
         'tags_json': jsonEncode(tags),
@@ -91,6 +97,7 @@ class JournalEntry {
     return JournalEntry(
       id: m['id'] as String?,
       uid: (m['uid'] ?? '') as String,
+      title: (m['title'] ?? '') as String,
       text: (m['text'] ?? '') as String,
       mood: (m['mood'] ?? 'calm') as String,
       tags: parsedTags,
@@ -118,6 +125,7 @@ class JournalEntry {
     return JournalEntry(
       id: m['id'] as String?,
       uid: (m['uid'] ?? '') as String,
+      title: (m['title'] ?? '') as String,
       text: (m['text'] ?? '') as String,
       mood: (m['mood'] ?? 'calm') as String,
       tags: parsedTags,

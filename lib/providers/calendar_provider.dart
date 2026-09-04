@@ -20,9 +20,10 @@ class CalendarProvider extends ChangeNotifier {
 
   List<CalendarEvent> getEventsForDay(DateTime day) {
     return _events.where((e) {
-      return e.dateTime.year == day.year &&
-          e.dateTime.month == day.month &&
-          e.dateTime.day == day.day;
+      final eLocal = e.dateTime.toLocal();
+      return eLocal.year == day.year &&
+          eLocal.month == day.month &&
+          eLocal.day == day.day;
     }).toList();
   }
 

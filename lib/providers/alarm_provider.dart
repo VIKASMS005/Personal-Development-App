@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import '../models/alarm_model.dart';
 import '../services/database_service.dart';
 import '../services/notification_service.dart';
@@ -100,6 +101,7 @@ class AlarmProvider extends ChangeNotifier {
           dateTime: alarmDt,
           body:
               'Time for ${alarm.label.isNotEmpty ? alarm.label : "your routine"}!',
+          matchDateTimeComponents: DateTimeComponents.dayOfWeekAndTime,
         );
       }
     }

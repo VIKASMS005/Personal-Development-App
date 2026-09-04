@@ -69,7 +69,7 @@ class _FinanceFormState extends State<FinanceForm> {
 
     final tx = FinanceTransaction(
       id: widget.initial?.id,
-      uid: widget.initial?.uid ?? '',   // ← preserve original uid so DB record is found on reload
+      uid: widget.initial?.uid ?? 'local_user',
       title: _titleC.text.trim(),
       amount: finalAmount,
       category: _category,

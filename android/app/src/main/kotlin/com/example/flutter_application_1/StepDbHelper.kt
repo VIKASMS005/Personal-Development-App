@@ -39,9 +39,10 @@ object StepDbHelper {
 
         if (lastRecordedDate.isNotEmpty() && lastRecordedDate != todayDateStr) {
             val lastBaseline = prefs.getLong(KEY_BASELINE_PREFIX + lastRecordedDate, -1L)
-            if (lastBaseline >= 0L && rawSteps >= lastBaseline) {
-                val stepsForYesterday = rawSteps - lastBaseline
-                writeStepRecord(context, uid, lastRecordedDate, stepsForYesterday)
+            val effectiveBaseline = if (lastBaseline >= 0L) lastBaseline else 0L
+            if (rawSteps >= effectiveBaseline) {
+                val stepsForYesterday = rawSteps - effectiveBaseline
+                writeStepRecord(context, uid, lastRecordedDate, stepsForYesterday, forceOverwrite = true)
             }
 
             val editor = prefs.edit()
@@ -49,10 +50,10 @@ object StepDbHelper {
             editor.putLong(KEY_BASELINE_PREFIX + todayDateStr, rawSteps)
             editor.putString(KEY_STEP_DATE, todayDateStr)
             editor.putLong(KEY_RAW_STEPS, rawSteps)
-            editor.apply()
+            editor.commit()
 
             // Initialize today's record in SQLite with 0 steps
-            writeStepRecord(context, uid, todayDateStr, 0L)
+            writeStepRecord(context, uid, todayDateStr, 0L, forceOverwrite = true)
             return true
         } else if (lastRecordedDate.isEmpty()) {
             val editor = prefs.edit()
@@ -62,7 +63,7 @@ object StepDbHelper {
             }
             editor.putString(KEY_STEP_DATE, todayDateStr)
             editor.putLong(KEY_RAW_STEPS, rawSteps)
-            editor.apply()
+            editor.commit()
         }
         return false
     }
@@ -72,7 +73,7 @@ object StepDbHelper {
      * Consolidates any duplicate rows so exactly ONE entry exists per (uid, date).
      */
     @Synchronized
-    fun writeStepRecord(context: Context, uid: String, dateStr: String, steps: Long) {
+    fun writeStepRecord(context: Context, uid: String, dateStr: String, steps: Long, forceOverwrite: Boolean = false) {
         try {
             val dbFile = context.getDatabasePath("grow_app_v2.db")
             if (!dbFile.exists()) return
@@ -109,7 +110,7 @@ object StepDbHelper {
                     db.delete("step_records", "id = ?", arrayOf(dupId))
                 }
 
-                val effectiveSteps = maxOf(existingSteps, steps)
+                val effectiveSteps = if (forceOverwrite) steps else maxOf(existingSteps, steps)
 
                 val cv = ContentValues().apply {
                     put("uid", uid)

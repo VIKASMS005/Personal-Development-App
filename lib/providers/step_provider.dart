@@ -22,6 +22,12 @@ class StepProvider extends ChangeNotifier {
   bool get isAvailable => _tracker.isAvailable;
   bool get hasHardwareSensor => _tracker.hasHardwareSensor;
 
+  void clear() {
+    _todayRecord = null;
+    _historyRecords = [];
+    notifyListeners();
+  }
+
   int get todaySteps => _todayRecord?.stepCount ?? 0;
   int get stepGoal => _dailyGoal;
   double get todayCalories => _todayRecord?.calories ?? 0.0;
@@ -42,15 +48,17 @@ class StepProvider extends ChangeNotifier {
 
   List<StepRecord> get last7DaysRecords {
     final now = DateTime.now();
+    final todayStr = formatCanonicalDate(now);
     return List.generate(7, (i) {
       // Calendar day arithmetic avoids any daylight savings time drift
       final d = DateTime(now.year, now.month, now.day - (6 - i));
       final dateStr = formatCanonicalDate(d);
+      if (dateStr == todayStr && _todayRecord != null) {
+        return _todayRecord!;
+      }
       final match = _historyRecords.firstWhere(
         (r) => r.date == dateStr,
-        orElse: () => (_todayRecord != null && _todayRecord!.date == dateStr)
-            ? _todayRecord!
-            : StepRecord(date: dateStr, stepCount: 0, goal: _dailyGoal),
+        orElse: () => StepRecord(date: dateStr, stepCount: 0, goal: _dailyGoal),
       );
       return match;
     });
@@ -58,14 +66,16 @@ class StepProvider extends ChangeNotifier {
 
   List<StepRecord> get last30DaysRecords {
     final now = DateTime.now();
+    final todayStr = formatCanonicalDate(now);
     return List.generate(30, (i) {
       final d = DateTime(now.year, now.month, now.day - (29 - i));
       final dateStr = formatCanonicalDate(d);
+      if (dateStr == todayStr && _todayRecord != null) {
+        return _todayRecord!;
+      }
       final match = _historyRecords.firstWhere(
         (r) => r.date == dateStr,
-        orElse: () => (_todayRecord != null && _todayRecord!.date == dateStr)
-            ? _todayRecord!
-            : StepRecord(date: dateStr, stepCount: 0, goal: _dailyGoal),
+        orElse: () => StepRecord(date: dateStr, stepCount: 0, goal: _dailyGoal),
       );
       return match;
     });
@@ -140,7 +150,23 @@ class StepProvider extends ChangeNotifier {
 
     await _tracker.init(uid);
 
+    final freshTodayStr = formatCanonicalDate();
+    _todayRecord = await _db.getStepRecord(uid, freshTodayStr);
+    _historyRecords = await _db.getAllStepRecords(uid);
+
     _isLoading = false;
+    notifyListeners();
+  }
+
+  /// Explicit on-demand refresh for pull-to-refresh.
+  /// Flushes the hardware sensor, updates SQLite, and refreshes in-memory records.
+  Future<void> refreshStepData(String uid) async {
+    await _tracker.refreshSteps(uid: uid);
+
+    final todayStr = formatCanonicalDate();
+    _todayRecord = await _db.getStepRecord(uid, todayStr);
+    _historyRecords = await _db.getAllStepRecords(uid);
+
     notifyListeners();
   }
 

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter_ringtone_player/flutter_ringtone_player.dart';
@@ -29,6 +30,16 @@ class NotificationService {
 
   static Future<void> init() async {
     tz.initializeTimeZones();
+    try {
+      const channel = MethodChannel('com.grow.app/settings');
+      final String? timeZoneName = await channel.invokeMethod<String>('getDeviceTimeZone');
+      if (timeZoneName != null && timeZoneName.isNotEmpty) {
+        tz.setLocalLocation(tz.getLocation(timeZoneName));
+        debugPrint('[NotificationService] Local timezone configured: $timeZoneName');
+      }
+    } catch (e) {
+      debugPrint('[NotificationService] Could not set native timezone location: $e');
+    }
 
     const android = AndroidInitializationSettings('@mipmap/ic_launcher');
     const darwin = DarwinInitializationSettings(
@@ -114,6 +125,10 @@ class NotificationService {
         looping: true,
         asAlarm: true,
       );
+      // Auto-silence alarm after 2 minutes if unattended
+      _ringtoneAutoOffTimer = Timer(const Duration(minutes: 2), () {
+        stopRingtone();
+      });
     } catch (e) {
       debugPrint('Error playing alarm ringtone: $e');
     }
@@ -200,6 +215,7 @@ class NotificationService {
     required AndroidNotificationDetails details,
     bool isAlarm = false,
     String? payload,
+    DateTimeComponents? matchDateTimeComponents,
   }) async {
     try {
       await _plugin.zonedSchedule(
@@ -217,6 +233,7 @@ class NotificationService {
         uiLocalNotificationDateInterpretation:
             UILocalNotificationDateInterpretation.absoluteTime,
         payload: payload,
+        matchDateTimeComponents: matchDateTimeComponents,
       );
     } catch (e) {
       debugPrint('Error scheduling exact notification (fallback to exactAllowWhileIdle): $e');
@@ -231,6 +248,7 @@ class NotificationService {
           uiLocalNotificationDateInterpretation:
               UILocalNotificationDateInterpretation.absoluteTime,
           payload: payload,
+          matchDateTimeComponents: matchDateTimeComponents,
         );
       } catch (e2) {
         debugPrint('Fallback to inexact: $e2');
@@ -244,6 +262,7 @@ class NotificationService {
           uiLocalNotificationDateInterpretation:
               UILocalNotificationDateInterpretation.absoluteTime,
           payload: payload,
+          matchDateTimeComponents: matchDateTimeComponents,
         );
       }
     }
@@ -255,6 +274,7 @@ class NotificationService {
     required String title,
     required DateTime dateTime,
     String body = 'Time to wake up and start your routine!',
+    DateTimeComponents? matchDateTimeComponents,
   }) async {
     final androidDetails = AndroidNotificationDetails(
       _alarmChannelId,
@@ -285,6 +305,7 @@ class NotificationService {
       scheduledDate: t1,
       details: androidDetails,
       isAlarm: true,
+      matchDateTimeComponents: matchDateTimeComponents,
     );
 
     // 2. Repeat 1 (3 minutes later)

@@ -105,6 +105,33 @@ class StepTrackerService {
     await _readAndUpdate(_currentUid!);
   }
 
+  /// Explicit on-demand refresh (Pull-to-Refresh on Home / Steps screen).
+  /// Flushes hardware sensor FIFO queue and recalculates today's steps.
+  Future<void> refreshSteps({String? uid}) async {
+    final effectiveUid = uid ?? _currentUid;
+    if (effectiveUid == null) return;
+
+    try {
+      // 1. Attempt hardware flush and read latest accumulated steps
+      Map<dynamic, dynamic>? result;
+      try {
+        result = await _channel.invokeMethod<Map<dynamic, dynamic>>('forceRefreshSteps');
+      } catch (_) {
+        result = await _channel.invokeMethod<Map<dynamic, dynamic>>('getAccumulatedSteps');
+      }
+
+      if (result != null) {
+        final rawSteps = (result['rawSteps'] as num?)?.toInt() ?? 0;
+        final nativeDate = result['stepDate'] as String? ?? '';
+        if (rawSteps > 0) {
+          await _processRawSteps(rawSteps, nativeDate, effectiveUid);
+        }
+      }
+    } catch (e) {
+      debugPrint('[Steps] Error during refreshSteps: $e');
+    }
+  }
+
   /// Core logic: read raw steps from native SharedPreferences / hardware sensor.
   Future<void> _readAndUpdate(String uid) async {
     try {
@@ -138,17 +165,18 @@ class StepTrackerService {
       final preRebootKey = 'grow_dart_pre_reboot_$todayStr';
       final lastRawKey = 'grow_dart_last_raw_$todayStr';
 
-      // ── Handle day boundary rollover in active session ───────────────────
-      if (_lastKnownDate != null && _lastKnownDate != todayStr) {
-        debugPrint('[Steps] Day boundary rollover detected: $_lastKnownDate -> $todayStr');
+      // ── Handle day boundary rollover (in-session or across restarts) ─────
+      final savedLastKnownDate = prefs.getString('grow_dart_last_known_date') ?? _lastKnownDate;
+      if (savedLastKnownDate != null && savedLastKnownDate != todayStr) {
+        debugPrint('[Steps] Day boundary rollover detected: $savedLastKnownDate -> $todayStr');
         // Finalize yesterday's record in SQLite
         if (_todaySteps > 0) {
-          final yesterdayRecord = await _db.getStepRecord(uid, _lastKnownDate!);
+          final yesterdayRecord = await _db.getStepRecord(uid, savedLastKnownDate);
           final goal = yesterdayRecord?.goal ?? 6000;
           await _db.upsertStepRecord(StepRecord(
             id: yesterdayRecord?.id,
             uid: uid,
-            date: _lastKnownDate!,
+            date: savedLastKnownDate,
             stepCount: _todaySteps,
             goal: goal,
           ));
@@ -161,12 +189,24 @@ class StepTrackerService {
         // Reset baseline for the new day to current hardware total
         await prefs.setInt(baselineKey, rawSteps);
         await prefs.setInt(preRebootKey, 0);
+        await prefs.setString('grow_dart_last_known_date', todayStr);
         await _channel.invokeMethod('setStepBaseline', {
           'date': todayStr,
           'baseline': rawSteps,
         });
+
+        // Initialize today's record in SQLite with 0 steps
+        final current = await _db.getStepRecord(uid, todayStr);
+        await _db.upsertStepRecord(StepRecord(
+          id: current?.id,
+          uid: uid,
+          date: todayStr,
+          stepCount: 0,
+          goal: current?.goal ?? 6000,
+        ));
       }
       _lastKnownDate = todayStr;
+      await prefs.setString('grow_dart_last_known_date', todayStr);
 
       // ── Baseline & Reboot calculation ────────────────────────────────────
       int baseline = prefs.getInt(baselineKey) ?? -1;
@@ -209,10 +249,11 @@ class StepTrackerService {
       int calculatedToday = (rawSteps - baseline) + preReboot;
       if (calculatedToday < 0) calculatedToday = 0;
 
-      // Ensure steps are strictly monotonic non-decreasing for the same day
+      // Ensure steps are strictly monotonic non-decreasing for the same day,
+      // but do NOT resurrect yesterday's steps if calculatedToday is 0
       final currentRecord = await _db.getStepRecord(uid, todayStr);
       final existingDbSteps = currentRecord?.stepCount ?? 0;
-      if (existingDbSteps > calculatedToday) {
+      if (existingDbSteps > calculatedToday && calculatedToday > 0) {
         calculatedToday = existingDbSteps;
         // Realign baseline so future increments build from this point
         baseline = rawSteps - calculatedToday + preReboot;
@@ -222,8 +263,6 @@ class StepTrackerService {
           'baseline': baseline,
         });
       }
-
-      if (calculatedToday == _todaySteps) return;
 
       _todaySteps = calculatedToday;
       onStepUpdate?.call(_todaySteps);

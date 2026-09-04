@@ -48,8 +48,10 @@ class Todo {
   /// Once set, this classification NEVER changes automatically.
   static String classify({required DateTime? dueDate, required DateTime? createdAt}) {
     if (dueDate == null || createdAt == null) return 'task';
-    final diff = dueDate.difference(createdAt);
-    return diff.inDays > 7 ? 'goal' : 'task';
+    final dueDay = DateTime(dueDate.year, dueDate.month, dueDate.day);
+    final createdDay = DateTime(createdAt.year, createdAt.month, createdAt.day);
+    final diffDays = dueDay.difference(createdDay).inDays;
+    return diffDays > 7 ? 'goal' : 'task';
   }
 
   bool get isGoal => type == 'goal';

@@ -13,6 +13,7 @@ import '../models/timetable_slot.dart';
 import '../models/chat_message.dart';
 import '../models/reminder.dart';
 import '../models/alarm_model.dart';
+import 'package:uuid/uuid.dart';
 import '../models/step_record.dart';
 
 class DatabaseService {
@@ -126,7 +127,10 @@ class DatabaseService {
           await db.execute('ALTER TABLE user_profiles ADD COLUMN phone_number TEXT');
         } catch (_) {}
         try {
-          await db.execute('ALTER TABLE user_profiles ADD COLUMN photo_path TEXT');
+          await db.execute("ALTER TABLE journal_entries ADD COLUMN title TEXT DEFAULT ''");
+        } catch (_) {}
+        try {
+          await db.execute("ALTER TABLE timetable_slots ADD COLUMN last_completed_date TEXT DEFAULT NULL");
         } catch (_) {}
         // Ensure step_records table exists
         await db.execute('''
@@ -145,6 +149,9 @@ class DatabaseService {
 
         // Deduplicate any pre-existing step records for the same calendar date
         await _consolidateStepRecords(db);
+
+        // Self-heal step records so steps walked yesterday are not attributed to today
+        await _repairMisassignedStepRecords(db);
 
         // Ensure unique index on (uid, date) to permanently prevent duplicate date rows
         try {
@@ -801,6 +808,86 @@ class DatabaseService {
       }
     } catch (e) {
       debugPrint('[DatabaseService] _consolidateStepRecords error: $e');
+    }
+  }
+
+  /// Self-heals step records so steps walked yesterday (e.g. Sep 3) are not erroneously
+  /// attributed to today (e.g. Sep 4).
+  Future<void> _repairMisassignedStepRecords(Database db) async {
+    try {
+      final now = DateTime.now();
+      final todayStr = '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+      final yesterday = DateTime(now.year, now.month, now.day - 1);
+      final yesterdayStr = '${yesterday.year.toString().padLeft(4, '0')}-${yesterday.month.toString().padLeft(2, '0')}-${yesterday.day.toString().padLeft(2, '0')}';
+
+      final rows = await db.rawQuery('SELECT DISTINCT uid FROM step_records');
+      for (final r in rows) {
+        final uid = r['uid'] as String? ?? 'local_user';
+        final todayRows = await db.query(
+          'step_records',
+          where: 'uid = ? AND date = ?',
+          whereArgs: [uid, todayStr],
+        );
+        final yesterdayRows = await db.query(
+          'step_records',
+          where: 'uid = ? AND date = ?',
+          whereArgs: [uid, yesterdayStr],
+        );
+
+        if (todayRows.isNotEmpty) {
+          final todaySteps = (todayRows.first['step_count'] as num?)?.toInt() ?? 0;
+          final yesterdaySteps = yesterdayRows.isNotEmpty
+              ? ((yesterdayRows.first['step_count'] as num?)?.toInt() ?? 0)
+              : 0;
+
+          // If today has steps from yesterday's walk while yesterday has 0:
+          if (todaySteps > 0 && yesterdaySteps == 0) {
+            if (yesterdayRows.isEmpty) {
+              await db.insert('step_records', {
+                'id': const Uuid().v4(),
+                'uid': uid,
+                'date': yesterdayStr,
+                'step_count': todaySteps,
+                'goal': (todayRows.first['goal'] as num?)?.toInt() ?? 6000,
+                'calories': todaySteps * 0.04,
+                'distance_km': (todaySteps * 0.762) / 1000.0,
+                'active_minutes': (todaySteps / 100.0).round(),
+                'updated_at': DateTime(yesterday.year, yesterday.month, yesterday.day, 23, 59).toIso8601String(),
+              });
+            } else {
+              await db.update(
+                'step_records',
+                {
+                  'step_count': todaySteps,
+                  'calories': todaySteps * 0.04,
+                  'distance_km': (todaySteps * 0.762) / 1000.0,
+                  'active_minutes': (todaySteps / 100.0).round(),
+                  'updated_at': DateTime(yesterday.year, yesterday.month, yesterday.day, 23, 59).toIso8601String(),
+                },
+                where: 'uid = ? AND date = ?',
+                whereArgs: [uid, yesterdayStr],
+              );
+            }
+
+            // Reset today's steps to 0
+            await db.update(
+              'step_records',
+              {
+                'step_count': 0,
+                'calories': 0.0,
+                'distance_km': 0.0,
+                'active_minutes': 0,
+                'updated_at': DateTime.now().toIso8601String(),
+              },
+              where: 'uid = ? AND date = ?',
+              whereArgs: [uid, todayStr],
+            );
+            debugPrint('[DatabaseService] Successfully repaired step records: migrated $todaySteps steps to $yesterdayStr, reset $todayStr to 0.');
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('[DatabaseService] _repairMisassignedStepRecords error: $e');
     }
   }
 

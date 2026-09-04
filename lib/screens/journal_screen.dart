@@ -45,7 +45,8 @@ class _JournalScreenState extends State<JournalScreen> {
     final entries = journalProvider.entries.where((j) {
       if (_searchQuery.isEmpty) return true;
       final q = _searchQuery.toLowerCase();
-      return j.text.toLowerCase().contains(q) ||
+      return j.title.toLowerCase().contains(q) ||
+          j.text.toLowerCase().contains(q) ||
           j.tags.any((t) => t.toLowerCase().contains(q));
     }).toList();
 
@@ -58,8 +59,8 @@ class _JournalScreenState extends State<JournalScreen> {
         foregroundColor: Colors.white,
         onPressed: () async {
           final j = await JournalForm.show(context);
-          if (j != null && auth.uid != null) {
-            j.uid = auth.uid!;
+          if (j != null) {
+            j.uid = auth.uid ?? 'local_user';
             await journalProvider.addJournal(j);
           }
         },
@@ -75,7 +76,7 @@ class _JournalScreenState extends State<JournalScreen> {
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
             child: TextField(
               decoration: InputDecoration(
-                hintText: 'Search journal entries or tags...',
+                hintText: 'Search title, reflections, or tags...',
                 prefixIcon: const Icon(Icons.search_rounded, size: 20),
                 contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                 suffixIcon: _searchQuery.isNotEmpty
@@ -94,9 +95,30 @@ class _JournalScreenState extends State<JournalScreen> {
             child: entries.isEmpty
                 ? EmptyState(
                     icon: Icons.auto_stories_rounded,
-                    title: 'No journal entries',
-                    subtitle: 'Capture your thoughts, victories, and reflections',
+                    title: _searchQuery.isNotEmpty
+                        ? 'No matching reflections'
+                        : 'No reflections yet',
+                    subtitle: _searchQuery.isNotEmpty
+                        ? 'Try a different search query'
+                        : 'Capture your thoughts, lessons, and wins each day',
                     iconColor: AppColors.journal,
+                    action: _searchQuery.isEmpty
+                        ? ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppColors.journal,
+                              foregroundColor: Colors.white,
+                            ),
+                            icon: const Icon(Icons.edit_rounded, size: 18),
+                            label: const Text('Write Reflection'),
+                            onPressed: () async {
+                              final j = await JournalForm.show(context);
+                              if (j != null) {
+                                j.uid = auth.uid ?? 'local_user';
+                                await journalProvider.addJournal(j);
+                              }
+                            },
+                          )
+                        : null,
                   )
                 : ListView.builder(
                     padding: const EdgeInsets.fromLTRB(16, 8, 16, 80),
@@ -171,11 +193,25 @@ class _JournalScreenState extends State<JournalScreen> {
                                     ),
                                   ],
                                 ),
-                                const SizedBox(height: 10),
+                                if (j.title.isNotEmpty) ...[
+                                  const SizedBox(height: 10),
+                                  Text(
+                                    j.title,
+                                    style: theme.textTheme.titleMedium?.copyWith(
+                                      fontWeight: FontWeight.w800,
+                                      fontSize: 16,
+                                      letterSpacing: -0.2,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 6),
+                                ] else ...[
+                                  const SizedBox(height: 10),
+                                ],
                                 Text(
                                   j.text,
                                   style: theme.textTheme.bodyMedium?.copyWith(
                                     height: 1.55,
+                                    color: theme.colorScheme.onSurface.withValues(alpha: j.title.isNotEmpty ? 0.85 : 1.0),
                                   ),
                                 ),
                                 if (j.tags.isNotEmpty) ...[

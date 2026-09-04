@@ -62,7 +62,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final uid = auth.uid ?? 'local_user';
       StepTrackerService.instance.reinit();
       context.read<StepProvider>().loadStepData(uid);
-      context.read<ScreenTimeProvider>().loadScreenTime();
+      context.read<ScreenTimeProvider>().loadScreenTime(isResume: true);
       _rebuildEngine();
     }
   }
@@ -73,6 +73,68 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _alarmWatcherTimer?.cancel();
     _analyticsPageController.dispose();
     super.dispose();
+  }
+
+  bool _isShowingAlarmDialog = false;
+
+  void _showAlarmRingingDialog(String alarmLabel) {
+    if (_isShowingAlarmDialog || !mounted) return;
+    _isShowingAlarmDialog = true;
+    NotificationService.playAlarmRingtone();
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogCtx) => PopScope(
+        canPop: false,
+        child: AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: Row(
+            children: [
+              const Text('⏰ ', style: TextStyle(fontSize: 26)),
+              Expanded(
+                child: Text(
+                  alarmLabel.isNotEmpty ? alarmLabel : 'Alarm Ringing',
+                  style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 18),
+                ),
+              ),
+            ],
+          ),
+          content: const Text(
+            'Time for your scheduled routine! Wake up and attack the day.',
+            style: TextStyle(fontSize: 14),
+          ),
+          actionsAlignment: MainAxisAlignment.spaceBetween,
+          actions: [
+            TextButton.icon(
+              icon: const Icon(Icons.snooze_rounded),
+              label: const Text('Snooze (+5m)'),
+              onPressed: () {
+                NotificationService.stopRingtone();
+                _isShowingAlarmDialog = false;
+                Navigator.pop(dialogCtx);
+              },
+            ),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.error,
+                foregroundColor: Colors.white,
+              ),
+              icon: const Icon(Icons.alarm_off_rounded),
+              label: const Text('Dismiss'),
+              onPressed: () {
+                NotificationService.stopRingtone();
+                _isShowingAlarmDialog = false;
+                Navigator.pop(dialogCtx);
+              },
+            ),
+          ],
+        ),
+      ),
+    ).then((_) {
+      NotificationService.stopRingtone();
+      _isShowingAlarmDialog = false;
+    });
   }
 
   void _startAlarmAndReminderWatcher() {
@@ -89,7 +151,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           if (_lastRungAlarmId != alarm.id || _lastRungMinute != currentMinute) {
             _lastRungAlarmId = alarm.id;
             _lastRungMinute = currentMinute;
-            NotificationService.playAlarmRingtone();
+            _showAlarmRingingDialog(alarm.label);
             break;
           }
         }
@@ -363,9 +425,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 800),
-          child: ListView(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 80),
-            children: [
+          child: RefreshIndicator(
+            color: AppColors.primary,
+            onRefresh: () async {
+              try {
+                final auth = context.read<AuthProvider>();
+                final uid = auth.uid ?? 'local_user';
+                await StepTrackerService.instance.refreshSteps(uid: uid);
+                await _reloadProviders(uid);
+              } catch (e) {
+                debugPrint('[HomeScreen] Refresh error: $e');
+              }
+            },
+            child: ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 80),
+              children: [
               // ─── 1. Sliding Analytics Carousel (One Card at a Time) ───────
               SizedBox(
                 height: 250,
@@ -602,7 +677,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ),
         ),
       ),
-    );
+    ),
+  );
   }
 
   // ─── Step Counter Sliding Card ─────────────────────────────────────────────

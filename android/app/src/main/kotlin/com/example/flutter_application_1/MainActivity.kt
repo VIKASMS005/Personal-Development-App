@@ -14,6 +14,7 @@ import android.graphics.drawable.Drawable
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
+import android.hardware.SensorEventListener2
 import android.hardware.SensorManager
 import android.os.Build
 import android.os.Handler
@@ -28,7 +29,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-class MainActivity : FlutterActivity(), SensorEventListener {
+class MainActivity : FlutterActivity(), SensorEventListener2 {
     private val CHANNEL = "com.grow.app/settings"
     private val PREFS_NAME = "grow_step_prefs"
     private val KEY_RAW_STEPS = "grow_raw_steps"
@@ -91,6 +92,10 @@ class MainActivity : FlutterActivity(), SensorEventListener {
                         }
                         result.success(responseMap)
                     }
+                    "getDeviceTimeZone" -> {
+                        val tzId = java.util.TimeZone.getDefault().id
+                        result.success(tzId)
+                    }
 
                     // ── Step Counter (Hardware sensor — silent, no notification) ──
                     "isStepSensorAvailable" -> {
@@ -107,66 +112,120 @@ class MainActivity : FlutterActivity(), SensorEventListener {
                     "getAccumulatedSteps" -> {
                         val today = StepDbHelper.getLocalTodayString()
                         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                        val savedRaw = prefs.getLong(KEY_RAW_STEPS, 0L)
-                        val effectiveRaw = if (lastRawStepCount > 0L) lastRawStepCount else savedRaw
 
-                        if (effectiveRaw > 0L) {
-                            // Check and process day rollover before returning steps
-                            StepDbHelper.handleDateRollover(this, effectiveRaw, today)
-
-                            // Instant response: Return known steps immediately so app never hangs
-                            result.success(mapOf("rawSteps" to effectiveRaw, "stepDate" to today))
-                            // Trigger background flush to get latest live delta
-                            try {
-                                stepSensor?.let { sensorManager?.flush(this) }
-                            } catch (_: Exception) {}
-                        } else {
-                            try {
-                                stepSensor?.let { sensorManager?.flush(this) }
-                            } catch (_: Exception) {}
-
+                        if (stepSensor != null) {
                             val handler = Handler(Looper.getMainLooper())
                             var answered = false
-                            val timeoutRunnable = Runnable {
+
+                            val finishRunnable = Runnable {
                                 if (!answered) {
                                     answered = true
-                                    val currentPrefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                                    val rawSteps = currentPrefs.getLong(KEY_RAW_STEPS, 0L)
-                                    val stepDate = currentPrefs.getString(KEY_STEP_DATE, today) ?: today
-                                    result.success(mapOf("rawSteps" to rawSteps, "stepDate" to stepDate))
+                                    val savedRaw = prefs.getLong(KEY_RAW_STEPS, 0L)
+                                    val currentRaw = if (lastRawStepCount > 0L) lastRawStepCount else savedRaw
+                                    if (currentRaw > 0L) {
+                                        StepDbHelper.handleDateRollover(this, currentRaw, today)
+                                    }
+                                    result.success(mapOf("rawSteps" to currentRaw, "stepDate" to today))
                                 }
                             }
-                            handler.postDelayed(timeoutRunnable, 500)
 
-                            pendingStepResults.add(object : MethodChannel.Result {
+                            val flushCallback = object : MethodChannel.Result {
                                 override fun success(res: Any?) {
                                     if (!answered) {
                                         answered = true
-                                        handler.removeCallbacks(timeoutRunnable)
+                                        handler.removeCallbacks(finishRunnable)
                                         result.success(res)
                                     }
                                 }
                                 override fun error(code: String, msg: String?, details: Any?) {
                                     if (!answered) {
                                         answered = true
-                                        handler.removeCallbacks(timeoutRunnable)
+                                        handler.removeCallbacks(finishRunnable)
                                         result.error(code, msg, details)
                                     }
                                 }
                                 override fun notImplemented() {
                                     if (!answered) {
                                         answered = true
-                                        handler.removeCallbacks(timeoutRunnable)
+                                        handler.removeCallbacks(finishRunnable)
                                         result.notImplemented()
                                     }
                                 }
-                            })
+                            }
+                            pendingStepResults.add(flushCallback)
+
+                            try {
+                                sensorManager?.flush(this)
+                            } catch (_: Exception) {}
+
+                            // Wait up to 120ms for flush; if already answered via onSensorChanged/onFlushCompleted, finishRunnable is cancelled
+                            handler.postDelayed(finishRunnable, 120)
+                        } else {
+                            val savedRaw = prefs.getLong(KEY_RAW_STEPS, 0L)
+                            val effectiveRaw = if (lastRawStepCount > 0L) lastRawStepCount else savedRaw
+                            if (effectiveRaw > 0L) {
+                                StepDbHelper.handleDateRollover(this, effectiveRaw, today)
+                            }
+                            result.success(mapOf("rawSteps" to effectiveRaw, "stepDate" to today))
                         }
+                    }
+                    "forceRefreshSteps" -> {
+                        val today = StepDbHelper.getLocalTodayString()
+                        initStepSensor()
+
+                        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                        val handler = Handler(Looper.getMainLooper())
+                        var answered = false
+
+                        val finishRunnable = Runnable {
+                            if (!answered) {
+                                answered = true
+                                val savedRaw = prefs.getLong(KEY_RAW_STEPS, 0L)
+                                val finalRaw = if (lastRawStepCount > 0L) lastRawStepCount else savedRaw
+                                if (finalRaw > 0L) {
+                                    StepDbHelper.handleDateRollover(this, finalRaw, today)
+                                }
+                                result.success(mapOf("rawSteps" to finalRaw, "stepDate" to today))
+                            }
+                        }
+
+                        val flushCallback = object : MethodChannel.Result {
+                            override fun success(res: Any?) {
+                                if (!answered) {
+                                    answered = true
+                                    handler.removeCallbacks(finishRunnable)
+                                    result.success(res)
+                                }
+                            }
+                            override fun error(code: String, msg: String?, details: Any?) {
+                                if (!answered) {
+                                    answered = true
+                                    handler.removeCallbacks(finishRunnable)
+                                    result.error(code, msg, details)
+                                }
+                            }
+                            override fun notImplemented() {
+                                if (!answered) {
+                                    answered = true
+                                    handler.removeCallbacks(finishRunnable)
+                                    result.notImplemented()
+                                }
+                            }
+                        }
+                        pendingStepResults.add(flushCallback)
+
+                        try {
+                            stepSensor?.let { sensorManager?.flush(this) }
+                        } catch (_: Exception) {}
+
+                        // Give flush 150ms to deliver any queued hardware FIFO sensor events to onSensorChanged
+                        handler.postDelayed(finishRunnable, 150)
                     }
                     "getStepBaseline" -> {
                         val dateStr = call.argument<String>("date") ?: ""
                         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                        val baseline = prefs.getLong(KEY_BASELINE_PREFIX + dateStr, 0L)
+                        val baselineKey = KEY_BASELINE_PREFIX + dateStr
+                        val baseline = if (prefs.contains(baselineKey)) prefs.getLong(baselineKey, -1L) else -1L
                         result.success(baseline)
                     }
                     "setStepBaseline" -> {
@@ -176,7 +235,7 @@ class MainActivity : FlutterActivity(), SensorEventListener {
                             val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                             prefs.edit()
                                 .putLong(KEY_BASELINE_PREFIX + dateStr, baseline)
-                                .apply()
+                                .commit()
                         }
                         result.success(null)
                     }
@@ -220,7 +279,9 @@ class MainActivity : FlutterActivity(), SensorEventListener {
     private fun initStepSensor() {
         try {
             sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
-            stepSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
+            // Request the hardware wake-up step sensor so hardware FIFO interrupts wake the AP during deep sleep
+            val wakeUpSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_STEP_COUNTER, true)
+            stepSensor = wakeUpSensor ?: sensorManager?.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
 
             // Pre-populate lastRawStepCount from storage so startup is instant
             val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -230,7 +291,8 @@ class MainActivity : FlutterActivity(), SensorEventListener {
             }
 
             stepSensor?.let {
-                sensorManager?.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL)
+                // Register with 5s max report latency to allow hardware FIFO batching during deep sleep
+                sensorManager?.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL, 5_000_000)
             }
         } catch (e: Exception) {
             // Ignore if sensor not available
@@ -241,6 +303,7 @@ class MainActivity : FlutterActivity(), SensorEventListener {
         if (event == null || event.sensor.type != Sensor.TYPE_STEP_COUNTER) return
 
         val rawSteps = event.values[0].toLong()
+        if (rawSteps <= 0L) return
         lastRawStepCount = rawSteps
         val today = StepDbHelper.getLocalTodayString()
 
@@ -252,6 +315,14 @@ class MainActivity : FlutterActivity(), SensorEventListener {
             .putLong(KEY_RAW_STEPS, rawSteps)
             .putString(KEY_STEP_DATE, today)
             .apply()
+
+        // Save today's steps to SQLite during batch callbacks so counts are preserved even if reclaimed
+        val todayBaseline = prefs.getLong(KEY_BASELINE_PREFIX + today, -1L)
+        if (todayBaseline >= 0L && rawSteps >= todayBaseline) {
+            val uid = prefs.getString(KEY_CURRENT_UID, "local_user") ?: "local_user"
+            val todaySteps = rawSteps - todayBaseline
+            StepDbHelper.writeStepRecord(this, uid, today, todaySteps)
+        }
 
         // Complete any pending getAccumulatedSteps calls with fresh hardware count
         if (pendingStepResults.isNotEmpty()) {
@@ -270,10 +341,27 @@ class MainActivity : FlutterActivity(), SensorEventListener {
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
+    override fun onFlushCompleted(sensor: Sensor?) {
+        if (sensor?.type != Sensor.TYPE_STEP_COUNTER) return
+
+        val today = StepDbHelper.getLocalTodayString()
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val savedRaw = prefs.getLong(KEY_RAW_STEPS, 0L)
+        val currentRaw = if (lastRawStepCount > 0L) lastRawStepCount else savedRaw
+
+        if (pendingStepResults.isNotEmpty()) {
+            val callbacks = ArrayList(pendingStepResults)
+            pendingStepResults.clear()
+            for (cb in callbacks) {
+                cb.success(mapOf("rawSteps" to currentRaw, "stepDate" to today))
+            }
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         stepSensor?.let {
-            sensorManager?.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL)
+            sensorManager?.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL, 5_000_000)
             try {
                 sensorManager?.flush(this)
             } catch (_: Exception) {}
@@ -282,10 +370,9 @@ class MainActivity : FlutterActivity(), SensorEventListener {
 
     override fun onPause() {
         super.onPause()
-        // Unregister listener on pause to prevent listener leaks and system HAL throttling
-        try {
-            sensorManager?.unregisterListener(this)
-        } catch (_: Exception) {}
+        // DO NOT unregister listener on pause!
+        // The step sensor listener must remain active while the screen is off and
+        // the phone is in the user's pocket so hardware steps continue to be tracked accurately.
     }
 
     override fun onDestroy() {

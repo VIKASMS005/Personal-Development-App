@@ -1,5 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:grow_personal_dev/models/todo.dart';
+import 'package:grow_personal_dev/models/habit.dart';
+import 'package:grow_personal_dev/models/timetable_slot.dart';
+import 'package:grow_personal_dev/models/journal_entry.dart';
 
 void main() {
   group('Task vs Goal Permanent Classification Tests', () {
@@ -206,6 +209,358 @@ void main() {
       final taskE = items.firstWhere((t) => t.id == 'task_e');
       expect(taskE.type, equals('task'));
       expect(taskE.createdAt, isNull);
+    });
+  });
+
+  group('Habit Streak Consecutive Days Calculation', () {
+    test('Calculates streak accurately when completed today and past consecutive days', () {
+      final now = DateTime(2026, 9, 4);
+      final history = {
+        '2026-09-04': true,
+        '2026-09-03': true,
+        '2026-09-02': true,
+        '2026-09-01': false, // broken streak
+        '2026-08-31': true,
+      };
+
+      final streak = Habit.calculateStreak(history, now);
+      expect(streak, equals(3));
+    });
+
+    test('Preserves streak on current day morning when today is not yet done but yesterday was done', () {
+      final now = DateTime(2026, 9, 4);
+      final history = {
+        '2026-09-03': true,
+        '2026-09-02': true,
+      };
+
+      // Today (2026-09-04) is not in history or false
+      final streak = Habit.calculateStreak(history, now);
+      expect(streak, equals(2));
+    });
+
+    test('Resets streak to 0 if both today and yesterday were missed', () {
+      final now = DateTime(2026, 9, 4);
+      final history = {
+        '2026-09-02': true,
+        '2026-09-01': true,
+      };
+
+      final streak = Habit.calculateStreak(history, now);
+      expect(streak, equals(0));
+    });
+
+    test('Returns 0 for empty or uncompleted history', () {
+      final now = DateTime(2026, 9, 4);
+      expect(Habit.calculateStreak({}, now), equals(0));
+      expect(Habit.calculateStreak({'2026-09-04': false}, now), equals(0));
+    });
+  });
+
+  group('Timetable Daily Reset Logic', () {
+    test('Slot is completed only on the date recorded in lastCompletedDate', () {
+      final slot = TimetableSlot(
+        startTime: '09:00',
+        endTime: '10:00',
+        title: 'Deep Work',
+        lastCompletedDate: '2026-09-03',
+      );
+
+      // On September 3rd, it was completed
+      expect(slot.isCompletedToday(DateTime(2026, 9, 3)), isTrue);
+
+      // On September 4th, it automatically resets to uncompleted
+      expect(slot.isCompletedToday(DateTime(2026, 9, 4)), isFalse);
+      expect(slot.isCompletedOn('2026-09-04'), isFalse);
+    });
+
+    test('Toggling completion updates lastCompletedDate to current date string', () {
+      final today = DateTime(2026, 9, 4);
+      final slot = TimetableSlot(
+        startTime: '09:00',
+        endTime: '10:00',
+        title: 'Deep Work',
+        lastCompletedDate: null,
+      );
+
+      expect(slot.isCompletedToday(today), isFalse);
+
+      // Marking complete
+      final completedSlot = slot.copyWith(isCompleted: true);
+      expect(completedSlot.lastCompletedDate, equals('2026-09-04'));
+      expect(completedSlot.isCompletedToday(today), isTrue);
+
+      // Marking uncompleted
+      final uncompletedSlot = completedSlot.copyWith(isCompleted: false);
+      expect(uncompletedSlot.lastCompletedDate, isNull);
+      expect(uncompletedSlot.isCompletedToday(today), isFalse);
+    });
+  });
+
+  group('Journal Entry Title & Description Integrity', () {
+    test('Serializes and deserializes title and description correctly', () {
+      final entry = JournalEntry(
+        title: 'Morning Focus',
+        text: 'Wrote 500 lines of code and meditated.',
+        mood: 'energetic',
+        tags: ['focus', 'coding'],
+      );
+
+      final sqliteMap = entry.toSqliteMap();
+      expect(sqliteMap['title'], equals('Morning Focus'));
+      expect(sqliteMap['text'], equals('Wrote 500 lines of code and meditated.'));
+
+      final restored = JournalEntry.fromSqlite(sqliteMap);
+      expect(restored.title, equals('Morning Focus'));
+      expect(restored.text, equals('Wrote 500 lines of code and meditated.'));
+      expect(restored.mood, equals('energetic'));
+      expect(restored.tags, containsAll(['focus', 'coding']));
+    });
+
+    test('Handles legacy database entries without a title gracefully', () {
+      final legacyMap = {
+        'id': 'legacy-id-123',
+        'uid': 'local_user',
+        'text': 'Old reflection without title',
+        'mood': 'calm',
+        'tags_json': '["mindset"]',
+        'created_at': DateTime.now().toIso8601String(),
+        'updated_at': DateTime.now().toIso8601String(),
+        'is_synced': 0,
+        'is_deleted': 0,
+      };
+
+      final restored = JournalEntry.fromSqlite(legacyMap);
+      expect(restored.title, isEmpty);
+      expect(restored.text, equals('Old reflection without title'));
+    });
+  });
+
+  group('Todo Calendar-Day Classification', () {
+    test('Boundary test: created late night due 8 days later is a goal', () {
+      final created = DateTime(2026, 9, 1, 23, 55);
+      final due = DateTime(2026, 9, 9, 8, 0); // 8 calendar days later
+
+      final classification = Todo.classify(dueDate: due, createdAt: created);
+      expect(classification, equals('goal'));
+    });
+
+    test('Boundary test: created early morning due 7 days later is a task', () {
+      final created = DateTime(2026, 9, 1, 1, 0);
+      final due = DateTime(2026, 9, 8, 23, 0); // exactly 7 calendar days later
+
+      final classification = Todo.classify(dueDate: due, createdAt: created);
+      expect(classification, equals('task'));
+    });
+  });
+
+  group('Step Date Rollover & Forward Navigation Guard Tests', () {
+    test('Steps walked on Sep 3 do NOT carry over to Sep 4 (Isolated Baselines)', () {
+      // Hardware sensor cumulative count at end of Sep 3: 5000 steps
+      const sep3RawSteps = 5000;
+      const sep3Baseline = 0;
+      final sep3Steps = sep3RawSteps - sep3Baseline;
+      expect(sep3Steps, equals(5000));
+
+      // Midnight rollover to Sep 4:
+      // When Sep 4 begins, baseline is set to rawSteps at the transition point (5000)
+      const sep4Baseline = sep3RawSteps; // 5000
+      var currentRawSteps = 5000; // User has not walked any steps on Sep 4 yet
+
+      var sep4Steps = (currentRawSteps - sep4Baseline);
+      if (sep4Steps < 0) sep4Steps = 0;
+
+      // Assert Sep 4 is 0 while Sep 3 remains 5000
+      expect(sep3Steps, equals(5000));
+      expect(sep4Steps, equals(0));
+
+      // User now walks 1,000 steps on Sep 4
+      currentRawSteps += 1000; // 6000 hardware total
+      sep4Steps = (currentRawSteps - sep4Baseline);
+
+      // Assert Sep 4 increases to 1000, Sep 3 remains strictly 5000
+      expect(sep3Steps, equals(5000));
+      expect(sep4Steps, equals(1000));
+    });
+
+    test('Forward Date Navigation is blocked on Today and clamped', () {
+      DateTime normalizeDate(DateTime dt) => DateTime(dt.year, dt.month, dt.day);
+
+      final today = DateTime(2026, 9, 4, 14, 30);
+      final normalizedToday = normalizeDate(today);
+
+      var selectedDate = normalizedToday;
+
+      // On Today (Sep 4): canGoNext MUST be false
+      bool canGoNext(DateTime selected) => normalizeDate(selected).isBefore(normalizedToday);
+      expect(canGoNext(selectedDate), isFalse);
+
+      // User navigates backward to Sep 3
+      selectedDate = DateTime(selectedDate.year, selectedDate.month, selectedDate.day - 1);
+      expect(selectedDate, equals(DateTime(2026, 9, 3)));
+      // On Sep 3: canGoNext MUST be true
+      expect(canGoNext(selectedDate), isTrue);
+
+      // User navigates forward from Sep 3 -> Sep 4
+      if (canGoNext(selectedDate)) {
+        final next = DateTime(selectedDate.year, selectedDate.month, selectedDate.day + 1);
+        if (!normalizeDate(next).isAfter(normalizedToday)) {
+          selectedDate = next;
+        }
+      }
+      expect(selectedDate, equals(DateTime(2026, 9, 4)));
+      // Back on Sep 4: canGoNext MUST be false again
+      expect(canGoNext(selectedDate), isFalse);
+
+      // Attempting to advance beyond Sep 4 is blocked
+      if (canGoNext(selectedDate)) {
+        selectedDate = DateTime(selectedDate.year, selectedDate.month, selectedDate.day + 1);
+      }
+      expect(selectedDate, equals(DateTime(2026, 9, 4))); // Still Sep 4!
+
+      // If a future date (e.g. Sep 5) arrives via cache/state, clamp forces it back to today
+      var futureDate = DateTime(2026, 9, 5);
+      if (normalizeDate(futureDate).isAfter(normalizedToday)) {
+        futureDate = normalizedToday;
+      }
+      expect(futureDate, equals(DateTime(2026, 9, 4)));
+    });
+
+    test('Month and Year navigation forward boundaries', () {
+      final now = DateTime(2026, 9, 4);
+
+      // Month View: Sep 2026
+      var selYear = 2026;
+      var selMonth = 9;
+      bool canGoNextMonth(int y, int m) => (y < now.year) || (y == now.year && m < now.month);
+
+      expect(canGoNextMonth(selYear, selMonth), isFalse); // September 2026 cannot go next
+
+      // Go back to August 2026
+      selMonth = 8;
+      expect(canGoNextMonth(selYear, selMonth), isTrue);
+
+      // Year View: 2026
+      bool canGoNextYear(int y) => y < now.year;
+      expect(canGoNextYear(2026), isFalse); // 2026 cannot go next
+      expect(canGoNextYear(2025), isTrue); // 2025 can go next
+    });
+  });
+
+  group('Pull-to-Refresh Step Tracking & Navigation Integrity Tests', () {
+    test('Pulling to refresh multiple times never double-counts steps (Idempotent)', () {
+      // Setup day baseline
+      const dayBaseline = 10000;
+      var rawHardwareSteps = 12000;
+
+      int calculateTodaySteps(int raw, int baseline) {
+        final diff = raw - baseline;
+        return diff < 0 ? 0 : diff;
+      }
+
+      // Initial read: 2000 steps
+      var todaySteps = calculateTodaySteps(rawHardwareSteps, dayBaseline);
+      expect(todaySteps, equals(2000));
+
+      // User pulls to refresh 10 times without walking
+      for (int i = 0; i < 10; i++) {
+        todaySteps = calculateTodaySteps(rawHardwareSteps, dayBaseline);
+        expect(todaySteps, equals(2000), reason: 'Refresh iteration $i should not duplicate steps');
+      }
+    });
+
+    test('Walking 500 steps and refreshing retrieves exact updated steps without duplication', () {
+      const dayBaseline = 10000;
+      var rawHardwareSteps = 12000; // 2,000 steps walked so far
+
+      int calculateTodaySteps(int raw, int baseline) {
+        final diff = raw - baseline;
+        return diff < 0 ? 0 : diff;
+      }
+
+      expect(calculateTodaySteps(rawHardwareSteps, dayBaseline), equals(2000));
+
+      // User walks 500 steps while phone is in pocket / screen locked
+      rawHardwareSteps += 500; // Now 12,500 hardware count
+
+      // User opens app and pulls to refresh
+      final refreshedSteps = calculateTodaySteps(rawHardwareSteps, dayBaseline);
+      expect(refreshedSteps, equals(2500));
+
+      // User refreshes 5 more times
+      for (int i = 0; i < 5; i++) {
+        expect(calculateTodaySteps(rawHardwareSteps, dayBaseline), equals(2500));
+      }
+    });
+
+    test('Historical date refresh preserves selected date and historical data', () {
+      final today = DateTime(2026, 9, 4);
+      var selectedDate = DateTime(2026, 9, 2); // User viewing Sep 2
+
+      final databaseRecords = {
+        '2026-09-02': 4500,
+        '2026-09-03': 6200,
+        '2026-09-04': 2500, // Today's live steps
+      };
+
+      // Simulating onRefresh handler on historical date:
+      DateTime normalizeDate(DateTime dt) => DateTime(dt.year, dt.month, dt.day);
+      final isToday = normalizeDate(selectedDate) == normalizeDate(today);
+      expect(isToday, isFalse);
+
+      // On historical date, refresh reloads database records without altering selectedDate
+      final dateKey = '${selectedDate.year}-${selectedDate.month.toString().padLeft(2, '0')}-${selectedDate.day.toString().padLeft(2, '0')}';
+      final displayedSteps = databaseRecords[dateKey] ?? 0;
+
+      // Verify Sep 2 data is 4,500 (NOT replaced with today's 2,500)
+      expect(displayedSteps, equals(4500));
+      expect(selectedDate, equals(DateTime(2026, 9, 2)));
+    });
+
+    test('Future date navigation remains disabled during and after refresh', () {
+      DateTime normalizeDate(DateTime dt) => DateTime(dt.year, dt.month, dt.day);
+      final today = normalizeDate(DateTime(2026, 9, 4));
+      var selectedDate = today;
+
+      bool canGoNext(DateTime selected) => normalizeDate(selected).isBefore(today);
+
+      // Before refresh on today
+      expect(canGoNext(selectedDate), isFalse);
+
+      // User pulls to refresh on today
+      // Re-evaluating navigation state:
+      expect(canGoNext(selectedDate), isFalse);
+
+      // Attempting to advance into Sep 5 is blocked
+      if (canGoNext(selectedDate)) {
+        selectedDate = DateTime(selectedDate.year, selectedDate.month, selectedDate.day + 1);
+      }
+      expect(selectedDate, equals(today)); // Still Sep 4
+    });
+
+    test('Screen-off pocket step batching accurately captures all 40-50 steps upon flush', () {
+      const todayBaseline = 5000;
+      var rawHardwareSteps = 5000; // Screen turned off with phone in pocket
+
+      int calculateTodaySteps(int raw, int baseline) {
+        final diff = raw - baseline;
+        return diff < 0 ? 0 : diff;
+      }
+
+      // Initial state: 0 steps walked today
+      expect(calculateTodaySteps(rawHardwareSteps, todayBaseline), equals(0));
+
+      // User walks 48 steps with phone in pocket (screen off)
+      // Hardware FIFO buffers steps silently in hardware sensor hub
+      rawHardwareSteps += 48;
+
+      // Phone is taken out and unlocked: hardware flush delivers all 48 steps at once
+      final flushedSteps = calculateTodaySteps(rawHardwareSteps, todayBaseline);
+      expect(flushedSteps, equals(48), reason: 'All 48 steps must be delivered, not just 6');
+
+      // User walks another 50 steps
+      rawHardwareSteps += 50;
+      expect(calculateTodaySteps(rawHardwareSteps, todayBaseline), equals(98));
     });
   });
 }

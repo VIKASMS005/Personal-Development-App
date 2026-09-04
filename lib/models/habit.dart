@@ -52,6 +52,38 @@ class Habit {
     );
   }
 
+  static int calculateStreak(Map<String, bool> history, [DateTime? referenceDate]) {
+    final ref = referenceDate ?? DateTime.now();
+    final today = DateTime(ref.year, ref.month, ref.day);
+
+    String toDateKey(DateTime d) =>
+        '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+    final todayKey = toDateKey(today);
+    final yesterdayKey = toDateKey(today.subtract(const Duration(days: 1)));
+
+    DateTime cursor;
+    if (history[todayKey] == true) {
+      cursor = today;
+    } else if (history[yesterdayKey] == true) {
+      cursor = today.subtract(const Duration(days: 1));
+    } else {
+      return 0;
+    }
+
+    int streakCount = 0;
+    while (true) {
+      final key = toDateKey(cursor);
+      if (history[key] == true) {
+        streakCount++;
+        cursor = cursor.subtract(const Duration(days: 1));
+      } else {
+        break;
+      }
+    }
+    return streakCount;
+  }
+
   bool get isCompletedToday {
     final today = DateTime.now().toIso8601String().split('T')[0];
     return history[today] == true;

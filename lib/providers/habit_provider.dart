@@ -16,25 +16,20 @@ class HabitProvider extends ChangeNotifier {
   }
 
   Future<void> loadHabits(String uid) async {
-    _habits = await _db.getHabits(uid);
+    final loaded = await _db.getHabits(uid);
+    _habits = loaded.map((h) {
+      final accurateStreak = Habit.calculateStreak(h.history);
+      return h.copyWith(streak: accurateStreak);
+    }).toList();
     notifyListeners();
-    for (final h in _habits) {
-      if (h.streak > 0) {
-        final todayStr = DateTime.now().toIso8601String().split('T')[0];
-        if (h.history[todayStr] != true) {
-          NotificationService.scheduleHabitStreakWarning(
-            id: h.id.hashCode,
-            habitTitle: h.title,
-          );
-        }
-      }
-    }
   }
 
   Future<void> addHabit(Habit habit) async {
-    _habits.insert(0, habit);
+    final accurateStreak = Habit.calculateStreak(habit.history);
+    final newHabit = habit.copyWith(streak: accurateStreak);
+    _habits.insert(0, newHabit);
     notifyListeners();
-    await _db.upsertHabit(habit);
+    await _db.upsertHabit(newHabit);
     NotificationService.scheduleHabitStreakWarning(
       id: habit.id.hashCode,
       habitTitle: habit.title,
@@ -44,9 +39,11 @@ class HabitProvider extends ChangeNotifier {
   Future<void> updateHabit(Habit habit) async {
     final idx = _habits.indexWhere((h) => h.id == habit.id);
     if (idx != -1) {
-      _habits[idx] = habit.copyWith(updatedAt: DateTime.now());
+      final accurateStreak = Habit.calculateStreak(habit.history);
+      final updated = habit.copyWith(streak: accurateStreak, updatedAt: DateTime.now());
+      _habits[idx] = updated;
       notifyListeners();
-      await _db.upsertHabit(_habits[idx]);
+      await _db.upsertHabit(updated);
     }
   }
 
@@ -55,13 +52,11 @@ class HabitProvider extends ChangeNotifier {
     final wasDone = history[dateStr] ?? false;
     history[dateStr] = !wasDone;
 
-    int newStreak = habit.streak;
+    final newStreak = Habit.calculateStreak(history);
     if (!wasDone) {
-      newStreak++;
       // If completed today, cancel warning
       await NotificationService.cancel(habit.id.hashCode);
     } else {
-      if (newStreak > 0) newStreak--;
       // Reschedule warning if uncompleted today
       await NotificationService.scheduleHabitStreakWarning(
         id: habit.id.hashCode,
