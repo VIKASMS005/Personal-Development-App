@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 class AppUsageRecord {
   final String packageName;
   final String appName;
@@ -19,6 +21,30 @@ class AppUsageRecord {
 
   int get durationInSeconds => usage.inSeconds;
   int get durationInMinutes => usage.inMinutes;
+
+  Map<String, dynamic> toMap() => {
+        'package_name': packageName,
+        'app_name': appName,
+        'usage_seconds': usage.inSeconds,
+        'start_date': startDate.toIso8601String(),
+        'end_date': endDate.toIso8601String(),
+        'category': category,
+        'icon_base64': iconBase64,
+      };
+
+  factory AppUsageRecord.fromMap(Map<String, dynamic> map) {
+    return AppUsageRecord(
+      packageName: map['package_name']?.toString() ?? '',
+      appName: map['app_name']?.toString() ?? '',
+      usage: Duration(seconds: (map['usage_seconds'] as num?)?.toInt() ?? 0),
+      startDate: DateTime.tryParse(map['start_date']?.toString() ?? '') ??
+          DateTime.fromMillisecondsSinceEpoch(0),
+      endDate: DateTime.tryParse(map['end_date']?.toString() ?? '') ??
+          DateTime.fromMillisecondsSinceEpoch(0),
+      category: map['category']?.toString(),
+      iconBase64: map['icon_base64']?.toString(),
+    );
+  }
 
   AppUsageRecord copyWith({
     String? packageName,
@@ -111,4 +137,38 @@ class DailyScreenTimeSummary {
     required this.appUsages,
     required this.categoryBreakdown,
   });
+
+  Map<String, dynamic> toMap(String uid) => {
+        'uid': uid,
+        'date': date,
+        'total_seconds': totalDuration.inSeconds,
+        'app_usages_json':
+            jsonEncode(appUsages.map((app) => app.toMap()).toList()),
+        'updated_at': DateTime.now().toIso8601String(),
+      };
+
+  factory DailyScreenTimeSummary.fromMap(Map<String, dynamic> map) {
+    final rawApps = map['app_usages_json']?.toString();
+    final apps = <AppUsageRecord>[];
+    if (rawApps != null && rawApps.isNotEmpty) {
+      try {
+        for (final item in jsonDecode(rawApps) as List) {
+          apps.add(
+              AppUsageRecord.fromMap(Map<String, dynamic>.from(item as Map)));
+        }
+      } catch (_) {}
+    }
+    final categories = <String, Duration>{};
+    for (final app in apps) {
+      categories[app.category] =
+          (categories[app.category] ?? Duration.zero) + app.usage;
+    }
+    return DailyScreenTimeSummary(
+      date: map['date']?.toString() ?? '',
+      totalDuration:
+          Duration(seconds: (map['total_seconds'] as num?)?.toInt() ?? 0),
+      appUsages: apps,
+      categoryBreakdown: categories,
+    );
+  }
 }

@@ -37,12 +37,25 @@ android {
         jvmTarget = JavaVersion.VERSION_11.toString()
     }
 
+    signingConfigs {
+        // The project currently has no production keystore. Use the standard
+        // local debug key so locally built release APKs are installable.
+        create("localRelease") {
+            val debugKeystore = file(System.getProperty("user.home") + "/.android/debug.keystore")
+            if (debugKeystore.exists()) {
+                storeFile = debugKeystore
+                storePassword = "android"
+                keyAlias = "AndroidDebugKey"
+                keyPassword = "android"
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // Sign release build with debug keys for testing/sideloading
-            signingConfig = signingConfigs.getByName("debug")
             isMinifyEnabled = false
             isShrinkResources = false
+            signingConfig = signingConfigs.getByName("localRelease")
         }
     }
 }

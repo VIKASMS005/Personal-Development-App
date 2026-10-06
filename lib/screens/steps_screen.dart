@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
@@ -14,11 +15,12 @@ class StepsScreen extends StatefulWidget {
 }
 
 class _StepsScreenState extends State<StepsScreen> {
-  int _selectedPeriod = 0; // 0=Day, 1=Month, 2=Year, 3=All-Time
+  int _selectedPeriod = 0; // 0=Day, 1=Week, 2=Month, 3=Year, 4=All-Time
 
   DateTime _normalizeDate(DateTime dt) => DateTime(dt.year, dt.month, dt.day);
 
   late DateTime _selectedDate;
+  late DateTime _selectedWeekDate;
   late int _selectedMonth;
   late int _selectedYear;
 
@@ -27,12 +29,15 @@ class _StepsScreenState extends State<StepsScreen> {
     super.initState();
     final today = _normalizeDate(DateTime.now());
     _selectedDate = today;
+    _selectedWeekDate = today;
     _selectedMonth = today.month;
     _selectedYear = today.year;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final auth = context.read<AuthProvider>();
       if (auth.uid != null) {
-        context.read<StepProvider>().loadStepData(auth.uid!);
+        // FIX M3: Use refreshStepData (lightweight) instead of loadStepData (full tracker
+        // re-init that creates duplicate polling timers on every screen open).
+        context.read<StepProvider>().refreshStepData(auth.uid!);
       }
     });
   }
@@ -101,7 +106,8 @@ class _StepsScreenState extends State<StepsScreen> {
 
   Future<void> _pickDate() async {
     final today = _normalizeDate(DateTime.now());
-    final initial = _normalizeDate(_selectedDate).isAfter(today) ? today : _normalizeDate(_selectedDate);
+    final currentAnchor = _selectedPeriod == 1 ? _selectedWeekDate : _selectedDate;
+    final initial = _normalizeDate(currentAnchor).isAfter(today) ? today : _normalizeDate(currentAnchor);
     final picked = await showDatePicker(
       context: context,
       initialDate: initial,
@@ -111,9 +117,11 @@ class _StepsScreenState extends State<StepsScreen> {
     if (picked != null) {
       final norm = _normalizeDate(picked);
       setState(() {
-        _selectedDate = norm.isAfter(today) ? today : norm;
-        _selectedMonth = _selectedDate.month;
-        _selectedYear = _selectedDate.year;
+        final safeDate = norm.isAfter(today) ? today : norm;
+        _selectedDate = safeDate;
+        _selectedWeekDate = safeDate;
+        _selectedMonth = safeDate.month;
+        _selectedYear = safeDate.year;
       });
     }
   }
@@ -131,6 +139,9 @@ class _StepsScreenState extends State<StepsScreen> {
       _selectedDate = today;
       _selectedMonth = today.month;
       _selectedYear = today.year;
+    }
+    if (_normalizeDate(_selectedWeekDate).isAfter(today)) {
+      _selectedWeekDate = today;
     }
     if (_selectedYear > today.year) {
       _selectedYear = today.year;
@@ -160,7 +171,7 @@ class _StepsScreenState extends State<StepsScreen> {
           constraints: const BoxConstraints(maxWidth: 800),
           child: Column(
             children: [
-              // 1. Period Selector (Day / Month / Year / All-Time)
+              // 1. Period Selector (Day / Week / Month / Year / All-Time)
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
                 child: Container(
@@ -171,9 +182,10 @@ class _StepsScreenState extends State<StepsScreen> {
                   child: Row(
                     children: [
                       _buildPeriodTab(0, 'Day'),
-                      _buildPeriodTab(1, 'Month'),
-                      _buildPeriodTab(2, 'Year'),
-                      _buildPeriodTab(3, 'All-Time'),
+                      _buildPeriodTab(1, 'Week'),
+                      _buildPeriodTab(2, 'Month'),
+                      _buildPeriodTab(3, 'Year'),
+                      _buildPeriodTab(4, 'All-Time'),
                     ],
                   ),
                 ),
@@ -205,7 +217,7 @@ class _StepsScreenState extends State<StepsScreen> {
                 ),
 
               // 2. Interactive Date Navigation Bar (if not All-Time)
-              if (_selectedPeriod < 3)
+              if (_selectedPeriod < 4)
                 _buildDateSelectorBar(theme, isDark),
 
               // 3. Main Analytics Content
@@ -221,7 +233,7 @@ class _StepsScreenState extends State<StepsScreen> {
                         // On today: force hardware sensor flush, baseline difference recalculation, and SQLite update
                         await stepProv.refreshStepData(uid);
                       } else {
-                        // Historical date, month, year, or all-time: reload SQLite database records
+                        // Historical date, week, month, year, or all-time: reload SQLite database records
                         // Note: _selectedDate, _selectedMonth, _selectedYear are strictly preserved!
                         await stepProv.loadStepData(uid);
                       }
@@ -232,10 +244,12 @@ class _StepsScreenState extends State<StepsScreen> {
                   child: _selectedPeriod == 0
                       ? _buildSpecificDayView(theme, isDark, stepProv)
                       : _selectedPeriod == 1
-                          ? _buildSpecificMonthView(theme, isDark, stepProv)
+                          ? _buildWeeklyView(theme, isDark, stepProv)
                           : _selectedPeriod == 2
-                              ? _buildSpecificYearView(theme, isDark, stepProv)
-                              : _buildAllTimeView(theme, isDark, stepProv),
+                              ? _buildSpecificMonthView(theme, isDark, stepProv)
+                              : _selectedPeriod == 3
+                                  ? _buildSpecificYearView(theme, isDark, stepProv)
+                                  : _buildAllTimeView(theme, isDark, stepProv),
                 ),
               ),
             ],
@@ -274,13 +288,23 @@ class _StepsScreenState extends State<StepsScreen> {
     final today = _normalizeDate(DateTime.now());
     final selectedDay = _normalizeDate(_selectedDate);
 
+    final monday = DateTime(
+      _selectedWeekDate.year,
+      _selectedWeekDate.month,
+      _selectedWeekDate.day - (_selectedWeekDate.weekday - 1),
+    );
+    final sunday = DateTime(monday.year, monday.month, monday.day + 6);
+    final isCurrentWeek = !today.isBefore(monday) && !today.isAfter(sunday);
+
     bool canGoNext = false;
     if (_selectedPeriod == 0) {
       canGoNext = selectedDay.isBefore(today);
     } else if (_selectedPeriod == 1) {
+      canGoNext = !isCurrentWeek && sunday.isBefore(today);
+    } else if (_selectedPeriod == 2) {
       canGoNext = (_selectedYear < today.year) ||
           (_selectedYear == today.year && _selectedMonth < today.month);
-    } else if (_selectedPeriod == 2) {
+    } else if (_selectedPeriod == 3) {
       canGoNext = _selectedYear < today.year;
     }
 
@@ -291,8 +315,12 @@ class _StepsScreenState extends State<StepsScreen> {
           ? 'Today (${DateFormat('MMM d, yyyy').format(_selectedDate)})'
           : DateFormat('EEEE, MMM d, yyyy').format(_selectedDate);
     } else if (_selectedPeriod == 1) {
-      label = DateFormat('MMMM yyyy').format(DateTime(_selectedYear, _selectedMonth));
+      label = isCurrentWeek
+          ? 'This Week (${DateFormat('MMM d').format(monday)} – ${DateFormat('MMM d').format(sunday)})'
+          : 'Week of ${DateFormat('MMM d').format(monday)} – ${DateFormat('MMM d, yyyy').format(sunday)}';
     } else if (_selectedPeriod == 2) {
+      label = DateFormat('MMMM yyyy').format(DateTime(_selectedYear, _selectedMonth));
+    } else if (_selectedPeriod == 3) {
       label = 'Year $_selectedYear';
     }
 
@@ -317,13 +345,15 @@ class _StepsScreenState extends State<StepsScreen> {
                   _selectedMonth = _selectedDate.month;
                   _selectedYear = _selectedDate.year;
                 } else if (_selectedPeriod == 1) {
+                  _selectedWeekDate = _selectedWeekDate.subtract(const Duration(days: 7));
+                } else if (_selectedPeriod == 2) {
                   if (_selectedMonth == 1) {
                     _selectedMonth = 12;
                     _selectedYear--;
                   } else {
                     _selectedMonth--;
                   }
-                } else if (_selectedPeriod == 2) {
+                } else if (_selectedPeriod == 3) {
                   _selectedYear--;
                 }
               });
@@ -360,6 +390,13 @@ class _StepsScreenState extends State<StepsScreen> {
                           _selectedYear = _selectedDate.year;
                         }
                       } else if (_selectedPeriod == 1) {
+                        final nextWeek = _selectedWeekDate.add(const Duration(days: 7));
+                        if (!_normalizeDate(nextWeek).isAfter(today)) {
+                          _selectedWeekDate = nextWeek;
+                        } else {
+                          _selectedWeekDate = today;
+                        }
+                      } else if (_selectedPeriod == 2) {
                         if (_selectedYear < today.year || (_selectedYear == today.year && _selectedMonth < today.month)) {
                           if (_selectedMonth == 12) {
                             _selectedMonth = 1;
@@ -368,7 +405,7 @@ class _StepsScreenState extends State<StepsScreen> {
                             _selectedMonth++;
                           }
                         }
-                      } else if (_selectedPeriod == 2) {
+                      } else if (_selectedPeriod == 3) {
                         if (_selectedYear < today.year) {
                           _selectedYear++;
                         }
@@ -516,24 +553,522 @@ class _StepsScreenState extends State<StepsScreen> {
     );
   }
 
-  // ─── 2. Specific Month View ────────────────────────────────────────────────
+  // ─── 2. Weekly View (7-Day Bar Chart: Monday to Sunday) ─────────────────────
+
+  Widget _buildWeeklyView(ThemeData theme, bool isDark, StepProvider stepProv) {
+    final now = DateTime.now();
+    final today = _normalizeDate(now);
+    final monday = DateTime(
+      _selectedWeekDate.year,
+      _selectedWeekDate.month,
+      _selectedWeekDate.day - (_selectedWeekDate.weekday - 1),
+    );
+    final sunday = DateTime(monday.year, monday.month, monday.day + 6);
+    final isCurrentWeek = !today.isBefore(monday) && !today.isAfter(sunday);
+
+    final weekRecords = stepProv.getWeekRecords(_selectedWeekDate);
+    final summary = stepProv.getWeekSummary(_selectedWeekDate);
+    final goal = stepProv.dailyGoal;
+
+    final dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+    // Maximum steps for scaling bars
+    final maxStepsInWeek = weekRecords.map((r) => r.stepCount).fold(0, (a, b) => a > b ? a : b);
+    final chartMax = max(goal, maxStepsInWeek);
+    final effectiveChartMax = chartMax > 0 ? chartMax : 6000;
+
+    return ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 80),
+      children: [
+        // 1. Weekly Performance Summary Hero Card
+        Container(
+          padding: const EdgeInsets.all(22),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: isDark
+                  ? [const Color(0xFF0F2E28), const Color(0xFF071915)]
+                  : [const Color(0xFFE0F2F1), const Color(0xFFB2DFDB)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(24),
+            boxShadow: [
+              BoxShadow(
+                color: AppColors.primary.withValues(alpha: 0.15),
+                blurRadius: 16,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Column(
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    isCurrentWeek ? "THIS WEEK'S TOTAL" : 'WEEK TOTAL',
+                    style: TextStyle(
+                      color: isDark ? Colors.white70 : Colors.teal.shade900,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 1.2,
+                    ),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      '${summary.goalsReached} / 7 Goals',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.primary,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.baseline,
+                textBaseline: TextBaseline.alphabetic,
+                children: [
+                  Text(
+                    NumberFormat('#,###').format(summary.totalSteps),
+                    style: const TextStyle(fontSize: 34, fontWeight: FontWeight.w900),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    'steps',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceAround,
+                children: [
+                  _MetricItem(
+                    icon: Icons.speed_rounded,
+                    color: AppColors.secondary,
+                    value: NumberFormat('#,###').format(summary.dailyAverage),
+                    unit: 'steps/d',
+                    label: 'Daily Avg',
+                  ),
+                  Container(height: 36, width: 1, color: Colors.black12),
+                  _MetricItem(
+                    icon: Icons.place_rounded,
+                    color: Colors.teal,
+                    value: summary.totalDistanceKm.toStringAsFixed(1),
+                    unit: 'km',
+                    label: 'Distance',
+                  ),
+                  Container(height: 36, width: 1, color: Colors.black12),
+                  _MetricItem(
+                    icon: Icons.local_fire_department_rounded,
+                    color: Colors.orange,
+                    value: summary.totalCalories.toStringAsFixed(0),
+                    unit: 'kcal',
+                    label: 'Calories',
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ).animate().fadeIn(duration: 300.ms),
+
+        const SizedBox(height: 18),
+
+        // 2. 7-Day Bar Chart Container (Monday to Sunday)
+        Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: theme.cardColor,
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: theme.colorScheme.onSurface.withValues(alpha: 0.08)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: isDark ? 0.2 : 0.03),
+                blurRadius: 12,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    '7-Day Activity Trend',
+                    style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+                  ),
+                  Row(
+                    children: [
+                      Container(
+                        width: 8,
+                        height: 8,
+                        decoration: const BoxDecoration(
+                          color: AppColors.primary,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        'Goal: ${NumberFormat('#,###').format(goal)}',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              const SizedBox(height: 24),
+
+              // The 7 Bars
+              SizedBox(
+                height: 200,
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: List.generate(7, (i) {
+                    final dayDate = DateTime(monday.year, monday.month, monday.day + i);
+                    final isDayToday = _normalizeDate(dayDate) == today;
+                    final isFuture = _normalizeDate(dayDate).isAfter(today);
+                    final record = weekRecords[i];
+                    final steps = record.stepCount;
+                    final isGoalMet = record.isGoalReached;
+                    final barFactor = isFuture
+                        ? 0.0
+                        : (steps / effectiveChartMax).clamp(0.04, 1.0);
+
+                    final dayLabel = dayNames[i];
+                    final dateNum = '${dayDate.day}';
+
+                    String stepLabel = '—';
+                    if (!isFuture) {
+                      if (steps >= 1000) {
+                        stepLabel = '${(steps / 1000).toStringAsFixed(1)}k';
+                      } else {
+                        stepLabel = '$steps';
+                      }
+                    }
+
+                    return Expanded(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          // Step Count Label above Bar
+                          FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              stepLabel,
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: isDayToday ? FontWeight.w900 : FontWeight.w700,
+                                color: isDayToday
+                                    ? AppColors.primary
+                                    : isGoalMet
+                                        ? const Color(0xFF10B981)
+                                        : theme.colorScheme.onSurface.withValues(alpha: isFuture ? 0.3 : 0.6),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+
+                          // Vertical Bar Stack
+                          Expanded(
+                            child: LayoutBuilder(
+                              builder: (ctx, constraints) {
+                                final maxHeight = constraints.maxHeight;
+                                final barHeight = isFuture ? 6.0 : (maxHeight * barFactor);
+
+                                return Stack(
+                                  alignment: Alignment.bottomCenter,
+                                  children: [
+                                    // Background track
+                                    Container(
+                                      width: 22,
+                                      height: maxHeight,
+                                      decoration: BoxDecoration(
+                                        color: isDark
+                                            ? Colors.white.withValues(alpha: 0.04)
+                                            : Colors.grey.shade100,
+                                        borderRadius: BorderRadius.circular(11),
+                                      ),
+                                    ),
+                                    // Active Bar
+                                    Container(
+                                      width: 22,
+                                      height: barHeight,
+                                      decoration: BoxDecoration(
+                                        gradient: LinearGradient(
+                                          begin: Alignment.topCenter,
+                                          end: Alignment.bottomCenter,
+                                          colors: isFuture
+                                              ? [Colors.transparent, Colors.transparent]
+                                              : isDayToday
+                                                  ? [const Color(0xFF2DD4BF), const Color(0xFF0D9488)]
+                                                  : isGoalMet
+                                                      ? [const Color(0xFF34D399), const Color(0xFF059669)]
+                                                      : [const Color(0xFF64748B), const Color(0xFF475569)],
+                                        ),
+                                        borderRadius: BorderRadius.circular(11),
+                                        boxShadow: isDayToday && steps > 0
+                                            ? [
+                                                BoxShadow(
+                                                  color: const Color(0xFF2DD4BF).withValues(alpha: 0.3),
+                                                  blurRadius: 8,
+                                                  offset: const Offset(0, -2),
+                                                ),
+                                              ]
+                                            : null,
+                                      ),
+                                      child: isGoalMet && barHeight >= 22
+                                          ? const Align(
+                                              alignment: Alignment.topCenter,
+                                              child: Padding(
+                                                padding: EdgeInsets.only(top: 2),
+                                                child: Icon(
+                                                  Icons.check_rounded,
+                                                  size: 14,
+                                                  color: Colors.white,
+                                                ),
+                                              ),
+                                            )
+                                          : null,
+                                    ),
+                                  ],
+                                );
+                              },
+                            ),
+                          ),
+
+                          const SizedBox(height: 8),
+
+                          // Day Label & Date Number
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                            decoration: isDayToday
+                                ? BoxDecoration(
+                                    color: AppColors.primary.withValues(alpha: 0.15),
+                                    borderRadius: BorderRadius.circular(6),
+                                  )
+                                : null,
+                            child: Column(
+                              children: [
+                                Text(
+                                  dayLabel,
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: isDayToday ? FontWeight.w900 : FontWeight.w700,
+                                    color: isDayToday
+                                        ? AppColors.primary
+                                        : theme.colorScheme.onSurface.withValues(alpha: isFuture ? 0.35 : 0.8),
+                                  ),
+                                ),
+                                Text(
+                                  dateNum,
+                                  style: TextStyle(
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.w600,
+                                    color: isDayToday
+                                        ? AppColors.primary
+                                        : theme.colorScheme.onSurface.withValues(alpha: isFuture ? 0.25 : 0.5),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }),
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        const SizedBox(height: 18),
+
+        // 3. Weekly Highlights Cards (Highest / Lowest Day)
+        Row(
+          children: [
+            Expanded(
+              child: _MetricCard(
+                title: 'Highest Day',
+                value: summary.highestDay != null && summary.highestDay!.stepCount > 0
+                    ? (() {
+                        final parts = summary.highestDay!.date.split('-');
+                        final d = DateTime(int.parse(parts[0]), int.parse(parts[1]), int.parse(parts[2]));
+                        return '${DateFormat('EEEE').format(d)}\n${NumberFormat('#,###').format(summary.highestDay!.stepCount)} steps';
+                      })()
+                    : 'None yet',
+                icon: Icons.emoji_events_rounded,
+                color: Colors.amber.shade700,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _MetricCard(
+                title: 'Lowest Day',
+                value: summary.lowestDay != null && summary.lowestDay!.stepCount > 0
+                    ? (() {
+                        final parts = summary.lowestDay!.date.split('-');
+                        final d = DateTime(int.parse(parts[0]), int.parse(parts[1]), int.parse(parts[2]));
+                        return '${DateFormat('EEEE').format(d)}\n${NumberFormat('#,###').format(summary.lowestDay!.stepCount)} steps';
+                      })()
+                    : (summary.daysElapsed > 0 ? '0 steps' : 'None yet'),
+                icon: Icons.trending_down_rounded,
+                color: Colors.blueGrey,
+              ),
+            ),
+          ],
+        ),
+
+        const SizedBox(height: 18),
+
+        // 4. Daily Breakdown List (Monday to Sunday)
+        Container(
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            color: theme.cardColor,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: theme.colorScheme.onSurface.withValues(alpha: 0.08)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Week Breakdown (${DateFormat('MMM d').format(monday)} – ${DateFormat('MMM d, yyyy').format(sunday)})',
+                style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
+              ),
+              const SizedBox(height: 14),
+              ListView.separated(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: 7,
+                separatorBuilder: (_, __) => const Divider(height: 1),
+                itemBuilder: (ctx, idx) {
+                  final dayDate = DateTime(monday.year, monday.month, monday.day + idx);
+                  final isDayToday = _normalizeDate(dayDate) == today;
+                  final isFuture = _normalizeDate(dayDate).isAfter(today);
+                  final r = weekRecords[idx];
+
+                  return ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: CircleAvatar(
+                      backgroundColor: isFuture
+                          ? Colors.grey.withValues(alpha: 0.05)
+                          : r.isGoalReached
+                              ? AppColors.primary.withValues(alpha: 0.15)
+                              : Colors.grey.withValues(alpha: 0.1),
+                      child: Icon(
+                        isFuture
+                            ? Icons.schedule_rounded
+                            : r.isGoalReached
+                                ? Icons.check_circle_rounded
+                                : Icons.directions_walk_rounded,
+                        color: isFuture
+                            ? Colors.grey.shade400
+                            : r.isGoalReached
+                                ? AppColors.primary
+                                : Colors.grey,
+                        size: 20,
+                      ),
+                    ),
+                    title: Row(
+                      children: [
+                        Text(
+                          DateFormat('EEEE, MMM d').format(dayDate),
+                          style: TextStyle(
+                            fontWeight: isDayToday ? FontWeight.w800 : FontWeight.w600,
+                            fontSize: 14,
+                            color: isDayToday ? AppColors.primary : null,
+                          ),
+                        ),
+                        if (isDayToday) ...[
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: AppColors.primary.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: const Text(
+                              'TODAY',
+                              style: TextStyle(
+                                fontSize: 9,
+                                fontWeight: FontWeight.w900,
+                                color: AppColors.primary,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    subtitle: Text(
+                      isFuture
+                          ? 'Upcoming'
+                          : '${r.distanceKm.toStringAsFixed(2)} km · ${r.calories.toStringAsFixed(0)} kcal',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: isFuture ? theme.colorScheme.onSurface.withValues(alpha: 0.4) : null,
+                      ),
+                    ),
+                    trailing: Text(
+                      isFuture ? '—' : '${NumberFormat('#,###').format(r.stepCount)} steps',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 14,
+                        color: isFuture
+                            ? theme.colorScheme.onSurface.withValues(alpha: 0.3)
+                            : r.isGoalReached
+                                ? AppColors.primary
+                                : null,
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ─── 3. Specific Month View ────────────────────────────────────────────────
 
   Widget _buildSpecificMonthView(ThemeData theme, bool isDark, StepProvider stepProv) {
     final history = stepProv.historyRecords;
     final prefix = '$_selectedYear-${_selectedMonth.toString().padLeft(2, '0')}';
 
-    // Canonical aggregation by calendar date: guaranteed exactly 1 entry per date
+    // Canonical aggregation by calendar date: guaranteed exactly 1 entry per date.
+    // FIX: Use MAX step count when de-duplicating (not SUM) — historyRecords can contain
+    // both a legacy in-memory record and the DB record, both representing the same daily total.
     final Map<String, StepRecord> dailyMap = {};
     for (final r in history) {
       if (!r.date.startsWith(prefix)) continue;
       if (dailyMap.containsKey(r.date)) {
         final existing = dailyMap[r.date]!;
-        dailyMap[r.date] = existing.copyWith(
-          stepCount: existing.stepCount + r.stepCount,
-          calories: existing.calories + r.calories,
-          distanceKm: existing.distanceKm + r.distanceKm,
-          activeMinutes: existing.activeMinutes + r.activeMinutes,
-        );
+        // Take the record with higher step count — both are daily totals, not increments
+        if (r.stepCount > existing.stepCount) {
+          dailyMap[r.date] = r;
+        }
       } else {
         dailyMap[r.date] = r;
       }

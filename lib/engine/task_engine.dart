@@ -2,8 +2,13 @@ import '../models/todo.dart';
 
 /// Pure computation engine for Task/Todo analytics.
 /// No database access, no Flutter dependencies.
+/// NOTE: [todos] should contain ALL todos (tasks + goals); this engine
+/// internally filters to task-only where counts are shown to the user.
 class TaskEngine {
   final List<Todo> todos;
+
+  // Task-only list: excludes goals so pending/completed counts are task-scoped
+  late final List<Todo> _tasks = todos.where((t) => t.isTask).toList();
 
   TaskEngine(this.todos);
 
@@ -15,10 +20,11 @@ class TaskEngine {
   }
 
   // ─── Basic Counts ──────────────────────────────────────────────────────────
+  // FIX C3: All user-facing counts use _tasks (task-only), not todos (all items).
 
-  int get totalCount => todos.length;
-  int get completedCount => todos.where((t) => t.completed).length;
-  int get pendingCount => todos.where((t) => !t.completed).length;
+  int get totalCount => _tasks.length;
+  int get completedCount => _tasks.where((t) => t.completed).length;
+  int get pendingCount => _tasks.where((t) => !t.completed).length;
 
   double get completionPercentage {
     if (totalCount == 0) return 0.0;
@@ -29,7 +35,7 @@ class TaskEngine {
 
   List<Todo> get overdueIncomplete {
     final now = DateTime.now();
-    return todos.where((t) {
+    return _tasks.where((t) {
       if (t.completed) return false;
       if (t.dueDate != null && t.dueDate!.isBefore(now)) return true;
       if (t.reminderDateTime != null && t.reminderDateTime!.isBefore(now)) {
@@ -43,7 +49,7 @@ class TaskEngine {
 
   List<Todo> completedOn(DateTime date) {
     final ds = _dateStr(date);
-    return todos
+    return _tasks
         .where((t) => t.completed && _dateStr(t.updatedAt) == ds)
         .toList();
   }
@@ -79,13 +85,13 @@ class TaskEngine {
   // ─── Priority Breakdown ──────────────────────────────────────────────────
 
   List<Todo> get urgentImportantTasks =>
-      todos.where((t) => t.priority == 1 && !t.completed).toList();
+      _tasks.where((t) => t.priority == 1 && !t.completed).toList();
   List<Todo> get importantTasks =>
-      todos.where((t) => t.priority == 2 && !t.completed).toList();
+      _tasks.where((t) => t.priority == 2 && !t.completed).toList();
   List<Todo> get q1Tasks => urgentImportantTasks;
   List<Todo> get q2Tasks => importantTasks;
   List<Todo> get highPriorityPending =>
-      todos.where((t) => (t.priority == 1 || t.priority == 2) && !t.completed).toList();
+      _tasks.where((t) => (t.priority == 1 || t.priority == 2) && !t.completed).toList();
 
   // ─── Daily completion chart (last 7 days) ─────────────────────────────────
 

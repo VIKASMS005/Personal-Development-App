@@ -28,6 +28,7 @@ class StepTrackerService {
   bool _hasHardwareSensor = true;
   String? _currentUid;
   String? _lastKnownDate;
+  bool _initialized = false; // FIX H2: prevent duplicate init on repeated calls
 
   // Polling timer — refreshes hardware count every 15 seconds while app is active
   Timer? _pollTimer;
@@ -41,27 +42,38 @@ class StepTrackerService {
 
   /// Called once on app start. Requests permission, checks hardware, initializes baseline, reads steps.
   Future<void> init(String uid) async {
+    // FIX H2: Only register the method call handler once. If UID changes (e.g.,
+    // account switch), allow full re-init. Otherwise skip to avoid duplicate timers.
+    final uidChanged = uid != _currentUid;
     _currentUid = uid;
 
-    // Listen for real-time hardware step events pushed from Android
-    _channel.setMethodCallHandler((call) async {
-      if (call.method == 'onRawStepsChanged') {
-        final raw = (call.arguments['rawSteps'] as num?)?.toInt() ?? 0;
-        final date = call.arguments['stepDate'] as String? ?? '';
-        if (_currentUid != null && raw > 0) {
-          await _processRawSteps(raw, date, _currentUid!);
+    if (!_initialized || uidChanged) {
+      _initialized = true;
+
+      // Listen for real-time hardware step events pushed from Android
+      _channel.setMethodCallHandler((call) async {
+        if (call.method == 'onRawStepsChanged') {
+          final raw = (call.arguments['rawSteps'] as num?)?.toInt() ?? 0;
+          final date = call.arguments['stepDate'] as String? ?? '';
+          final discarded = (call.arguments['discardedSteps'] as num?)?.toInt() ?? 0;
+          if (_currentUid != null && raw > 0) {
+            await _processRawSteps(raw, date, _currentUid!, nativeDiscarded: discarded);
+          }
         }
-      }
-    });
+      });
+    }
 
     // 1. Check if device has hardware TYPE_STEP_COUNTER
     try {
-      final available = await _channel.invokeMethod<bool>('isStepSensorAvailable');
+      final available =
+          await _channel.invokeMethod<bool>('isStepSensorAvailable');
       if (available == false) {
         _hasHardwareSensor = false;
         _isAvailable = false;
-        debugPrint('[Steps] Hardware step counter not available on this device');
-        onStatusUpdate?.call('Hardware step counter not available on this device');
+        debugPrint(
+            '[Steps] Hardware step counter not available on this device');
+        onStatusUpdate
+            ?.call('Hardware step counter not available on this device');
         return;
       }
     } catch (_) {}
@@ -74,7 +86,8 @@ class StepTrackerService {
     if (!status.isGranted) {
       _isAvailable = false;
       debugPrint('[Steps] Activity recognition permission not granted');
-      onStatusUpdate?.call('Activity recognition permission required to track steps');
+      onStatusUpdate
+          ?.call('Activity recognition permission required to track steps');
       return;
     }
 
@@ -83,13 +96,14 @@ class StepTrackerService {
     // 3. Re-init native sensor listener now that permission is confirmed granted
     try {
       await _channel.invokeMethod('setCurrentUid', {'uid': uid});
+      await _channel.invokeMethod('startStepTrackingService');
       await _channel.invokeMethod('reinitStepSensor');
     } catch (_) {}
 
     // 4. Read current accumulated hardware steps and update UI
     await _readAndUpdate(uid);
 
-    // 5. Periodic refresh while app is active
+    // 5. Periodic refresh while app is active — cancel old timer first to prevent duplicates
     _pollTimer?.cancel();
     _pollTimer = Timer.periodic(const Duration(seconds: 15), (_) async {
       if (_currentUid != null) await _readAndUpdate(_currentUid!);
@@ -115,16 +129,19 @@ class StepTrackerService {
       // 1. Attempt hardware flush and read latest accumulated steps
       Map<dynamic, dynamic>? result;
       try {
-        result = await _channel.invokeMethod<Map<dynamic, dynamic>>('forceRefreshSteps');
+        result = await _channel
+            .invokeMethod<Map<dynamic, dynamic>>('forceRefreshSteps');
       } catch (_) {
-        result = await _channel.invokeMethod<Map<dynamic, dynamic>>('getAccumulatedSteps');
+        result = await _channel
+            .invokeMethod<Map<dynamic, dynamic>>('getAccumulatedSteps');
       }
 
       if (result != null) {
         final rawSteps = (result['rawSteps'] as num?)?.toInt() ?? 0;
         final nativeDate = result['stepDate'] as String? ?? '';
+        final discarded = (result['discardedSteps'] as num?)?.toInt() ?? 0;
         if (rawSteps > 0) {
-          await _processRawSteps(rawSteps, nativeDate, effectiveUid);
+          await _processRawSteps(rawSteps, nativeDate, effectiveUid, nativeDiscarded: discarded);
         }
       }
     } catch (e) {
@@ -135,12 +152,14 @@ class StepTrackerService {
   /// Core logic: read raw steps from native SharedPreferences / hardware sensor.
   Future<void> _readAndUpdate(String uid) async {
     try {
-      final result = await _channel.invokeMethod<Map<dynamic, dynamic>>('getAccumulatedSteps');
+      final result = await _channel
+          .invokeMethod<Map<dynamic, dynamic>>('getAccumulatedSteps');
       if (result == null) return;
 
       final rawSteps = (result['rawSteps'] as num?)?.toInt() ?? 0;
       final nativeDate = result['stepDate'] as String? ?? '';
-      await _processRawSteps(rawSteps, nativeDate, uid);
+      final discarded = (result['discardedSteps'] as num?)?.toInt() ?? 0;
+      await _processRawSteps(rawSteps, nativeDate, uid, nativeDiscarded: discarded);
     } catch (e) {
       debugPrint('[Steps] Error reading accumulated steps: $e');
     }
@@ -154,31 +173,49 @@ class StepTrackerService {
     return '$year-$month-$day';
   }
 
-  Future<void> _processRawSteps(int rawSteps, String nativeDate, String uid) async {
+  Future<void> _processRawSteps(
+      int rawSteps, String nativeDate, String uid, {int nativeDiscarded = 0}) async {
     try {
-      if (rawSteps <= 0) return; // Do not initialize baseline with 0 if sensor hasn't reported yet
+      if (rawSteps <= 0) {
+        return; // Do not initialize baseline with 0 if sensor hasn't reported yet
+      }
 
-      final todayStr = _getCanonicalDate();
+      final parsedNativeDate = DateTime.tryParse(nativeDate);
+      final todayStr = parsedNativeDate == null
+          ? _getCanonicalDate()
+          : _getCanonicalDate(parsedNativeDate);
       final prefs = await SharedPreferences.getInstance();
+
+      // FIX C2: Read user's chosen goal from SharedPreferences instead of ?? 6000.
+      // This ensures the goal the user set (e.g. 10,000) is always used.
+      final userGoal = prefs.getInt('grow_daily_step_goal') ?? 6000;
 
       final baselineKey = 'grow_dart_baseline_$todayStr';
       final preRebootKey = 'grow_dart_pre_reboot_$todayStr';
       final lastRawKey = 'grow_dart_last_raw_$todayStr';
 
       // ── Handle day boundary rollover (in-session or across restarts) ─────
-      final savedLastKnownDate = prefs.getString('grow_dart_last_known_date') ?? _lastKnownDate;
+      final savedLastKnownDate =
+          prefs.getString('grow_dart_last_known_date') ?? _lastKnownDate;
       if (savedLastKnownDate != null && savedLastKnownDate != todayStr) {
-        debugPrint('[Steps] Day boundary rollover detected: $savedLastKnownDate -> $todayStr');
-        // Finalize yesterday's record in SQLite
+        debugPrint(
+            '[Steps] Day boundary rollover detected: $savedLastKnownDate -> $todayStr');
+        // Finalize yesterday's record in SQLite — use its own goal if it already exists
         if (_todaySteps > 0) {
-          final yesterdayRecord = await _db.getStepRecord(uid, savedLastKnownDate);
-          final goal = yesterdayRecord?.goal ?? 6000;
+          final yesterdayRecord =
+              await _db.getStepRecord(uid, savedLastKnownDate);
+          // Use the goal already stored in yesterday's record (the one the user had set then),
+          // falling back to the current user goal — never blindly to 6000.
+          final yesterdayGoal =
+              (yesterdayRecord?.goal != null && yesterdayRecord!.goal > 0)
+                  ? yesterdayRecord.goal
+                  : userGoal;
           await _db.upsertStepRecord(StepRecord(
             id: yesterdayRecord?.id,
             uid: uid,
             date: savedLastKnownDate,
             stepCount: _todaySteps,
-            goal: goal,
+            goal: yesterdayGoal,
           ));
         }
 
@@ -195,14 +232,17 @@ class StepTrackerService {
           'baseline': rawSteps,
         });
 
-        // Initialize today's record in SQLite with 0 steps
+        // Initialize today's record in SQLite with 0 steps, using user's actual goal
         final current = await _db.getStepRecord(uid, todayStr);
+        final todayGoal = (current?.goal != null && current!.goal > 0)
+            ? current.goal
+            : userGoal;
         await _db.upsertStepRecord(StepRecord(
           id: current?.id,
           uid: uid,
           date: todayStr,
           stepCount: 0,
-          goal: current?.goal ?? 6000,
+          goal: todayGoal,
         ));
       }
       _lastKnownDate = todayStr;
@@ -217,7 +257,8 @@ class StepTrackerService {
         // Check if native background worker already set a baseline for today
         int? nativeBaseline;
         try {
-          final nb = await _channel.invokeMethod<num>('getStepBaseline', {'date': todayStr});
+          final nb = await _channel
+              .invokeMethod<num>('getStepBaseline', {'date': todayStr});
           if (nb != null && nb.toInt() > 0) {
             nativeBaseline = nb.toInt();
           }
@@ -234,14 +275,26 @@ class StepTrackerService {
       // Guard: if device rebooted, rawSteps reset to 0 in hardware (rawSteps < baseline)
       if (rawSteps < baseline) {
         // Accumulate steps achieved prior to reboot
-        final stepsBeforeReboot = lastRaw >= baseline ? (lastRaw - baseline) : 0;
-        preReboot += stepsBeforeReboot;
+        final stepsBeforeReboot =
+            lastRaw >= baseline ? (lastRaw - baseline) : 0;
+
+        // BUG 2 FIX: Also pick up the pre-reboot offset written by BootReceiver.kt
+        // so steps counted before the reboot are never lost even on first cold start.
+        int nativeBootOffset = 0;
+        try {
+          final nb = await _channel
+              .invokeMethod<num>('getPreRebootOffset', {'date': todayStr});
+          if (nb != null) nativeBootOffset = nb.toInt();
+        } catch (_) {}
+
+        preReboot += stepsBeforeReboot + nativeBootOffset;
         await prefs.setInt(preRebootKey, preReboot);
 
         // Reset baseline to 0 for post-reboot counting
         baseline = 0;
         await prefs.setInt(baselineKey, 0);
-        await _channel.invokeMethod('setStepBaseline', {'date': todayStr, 'baseline': 0});
+        await _channel
+            .invokeMethod('setStepBaseline', {'date': todayStr, 'baseline': 0});
       }
 
       await prefs.setInt(lastRawKey, rawSteps);
@@ -249,35 +302,92 @@ class StepTrackerService {
       int calculatedToday = (rawSteps - baseline) + preReboot;
       if (calculatedToday < 0) calculatedToday = 0;
 
-      // Ensure steps are strictly monotonic non-decreasing for the same day,
-      // but do NOT resurrect yesterday's steps if calculatedToday is 0
-      final currentRecord = await _db.getStepRecord(uid, todayStr);
-      final existingDbSteps = currentRecord?.stepCount ?? 0;
-      if (existingDbSteps > calculatedToday && calculatedToday > 0) {
-        calculatedToday = existingDbSteps;
-        // Realign baseline so future increments build from this point
-        baseline = rawSteps - calculatedToday + preReboot;
-        await prefs.setInt(baselineKey, baseline);
-        await _channel.invokeMethod('setStepBaseline', {
-          'date': todayStr,
-          'baseline': baseline,
-        });
+      // Subtract steps discarded by the native gait validator.
+      // nativeDiscarded comes directly from the native side's SharedPreferences
+      // (passed via MethodChannel) — this is the authoritative count of false
+      // positives detected by the GaitValidator (phone shaking, leg bouncing, etc.)
+      int discardedSteps = nativeDiscarded;
+      final cleanupDone = prefs.getBool('grow_cleanup_v6_done') ?? false;
+      if (!cleanupDone) {
+        await prefs.setInt('grow_discarded_steps_$todayStr', 0);
+        await prefs.setBool('grow_cleanup_v6_done', true);
+        discardedSteps = 0;
+      } else if (discardedSteps <= 0) {
+        // Fallback: query native directly if not passed in (e.g. legacy code path)
+        try {
+          final nd = await _channel
+              .invokeMethod<num>('getDiscardedSteps', {'date': todayStr});
+          if (nd != null && nd.toInt() > 0) discardedSteps = nd.toInt();
+        } catch (_) {}
       }
+      calculatedToday = (calculatedToday - discardedSteps).clamp(0, calculatedToday);
+
+      // Read current DB record for goal preservation
+      final currentRecord = await _db.getStepRecord(uid, todayStr);
+
+      // NOTE: We deliberately do NOT apply a monotonic non-decreasing guard here.
+      // The native gait validator may INCREASE discardedSteps over time as it
+      // detects more false positives, which correctly DECREASES calculatedToday.
+      // A monotonic guard would lock in false step counts and defeat the validator.
 
       _todaySteps = calculatedToday;
       onStepUpdate?.call(_todaySteps);
 
-      // ── Persist to SQLite (enforcing 1 canonical row per calendar date) ───
-      final goal = currentRecord?.goal ?? 6000;
+      // ── Persist to SQLite — always use user's chosen goal, never 6000 blindly ───
+      // If the DB record already has a non-zero goal (user may have set it via the goal dialog),
+      // preserve it. Otherwise use the SharedPreferences goal.
+      final persistGoal =
+          (currentRecord?.goal != null && currentRecord!.goal > 0)
+              ? currentRecord.goal
+              : userGoal;
       await _db.upsertStepRecord(StepRecord(
         id: currentRecord?.id,
         uid: uid,
         date: todayStr,
         stepCount: _todaySteps,
-        goal: goal,
+        goal: persistGoal,
       ));
     } catch (e) {
       debugPrint('[Steps] Error processing raw steps: $e');
+    }
+  }
+
+  /// BUG 3 FIX: Lower the baseline by [steps] on both the native and Dart side
+  /// after manual steps are added, so the formula `todaySteps = rawSteps - baseline`
+  /// naturally incorporates the manual addition and the sensor never overwrites it.
+  Future<void> adjustManualStepsBaseline(int steps, String todayStr) async {
+    try {
+      // 1. Lower native (Kotlin) baseline
+      await _channel.invokeMethod('adjustStepBaseline', {
+        'date': todayStr,
+        'delta': steps,
+      });
+
+      // 2. Lower Dart-side baseline in SharedPreferences
+      final prefs = await SharedPreferences.getInstance();
+      final baselineKey = 'grow_dart_baseline_$todayStr';
+      final preRebootKey = 'grow_dart_pre_reboot_$todayStr';
+      final current = prefs.getInt(baselineKey) ?? 0;
+      final newBaseline = (current - steps).clamp(0, current);
+      await prefs.setInt(baselineKey, newBaseline);
+      if (steps > current) {
+        final remainder = steps - current;
+        final currentPre = prefs.getInt(preRebootKey) ?? 0;
+        await prefs.setInt(preRebootKey, currentPre + remainder);
+      }
+    } catch (e) {
+      debugPrint('[Steps] adjustManualStepsBaseline error: $e');
+    }
+  }
+
+  /// FIX C2: Push the user's chosen step goal to native (Kotlin) SharedPreferences.
+  /// Called by StepProvider.updateDailyGoal() so background workers (StepDbHelper,
+  /// DailyStepWorker) can read the correct goal when inserting new day rows.
+  Future<void> setNativeStepGoal(int goal) async {
+    try {
+      await _channel.invokeMethod('setStepGoal', {'goal': goal});
+    } catch (e) {
+      debugPrint('[Steps] setNativeStepGoal error: $e');
     }
   }
 

@@ -5,14 +5,16 @@ class Todo {
   String uid;
   String title;
   String description;
-  String category; // 'Study', 'Work', 'Workout', 'Coding', 'Reading', 'Personal', 'General', 'Other'
+  String
+      category; // 'Study', 'Work', 'Workout', 'Coding', 'Reading', 'Personal', 'General', 'Other'
   DateTime? dueDate;
   DateTime? reminderDateTime;
   int priority; // 1..4 (1=Urgent&Important, 2=Important, 3=Urgent, 4=Low)
   int timeSpentSeconds; // Total tracked focus/study time in seconds
   int targetMinutes; // Optional goal duration in minutes
   bool completed;
-  String type; // Permanent classification: 'task' (<= 7 days at creation) or 'goal' (> 7 days at creation)
+  String
+      type; // Permanent classification: 'task' (<= 7 days at creation) or 'goal' (> 7 days at creation)
   DateTime? createdAt;
   DateTime updatedAt;
   bool isSynced;
@@ -46,7 +48,8 @@ class Todo {
   /// • Deadline > 7 days from creation -> 'goal'
   /// If no valid creation date exists, do not guess -> default 'task'
   /// Once set, this classification NEVER changes automatically.
-  static String classify({required DateTime? dueDate, required DateTime? createdAt}) {
+  static String classify(
+      {required DateTime? dueDate, required DateTime? createdAt}) {
     if (dueDate == null || createdAt == null) return 'task';
     final dueDay = DateTime(dueDate.year, dueDate.month, dueDate.day);
     final createdDay = DateTime(createdAt.year, createdAt.month, createdAt.day);
@@ -84,7 +87,7 @@ class Todo {
   /// True when the item can still be marked complete (before or within grace period).
   bool get canComplete {
     if (completed) return true; // already done — always allow un-check
-    return !isMissed;           // still within grace window or no due date
+    return !isMissed; // still within grace window or no due date
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -140,6 +143,7 @@ class Todo {
         'targetMinutes': targetMinutes,
         'completed': completed,
         'type': type,
+        'classification_locked': 1,
         'createdAt': createdAt?.toIso8601String(),
         'updatedAt': updatedAt.toIso8601String(),
         'isDeleted': isDeleted,
@@ -158,6 +162,7 @@ class Todo {
         'target_minutes': targetMinutes,
         'completed': completed ? 1 : 0,
         'type': type,
+        'classification_locked': 1,
         'created_at': createdAt?.toIso8601String(),
         'updated_at': updatedAt.toIso8601String(),
         'is_synced': isSynced ? 1 : 0,
@@ -179,7 +184,10 @@ class Todo {
 
     final existingType = m['type']?.toString();
     String parsedType;
-    if (existingType == 'goal') {
+    final classificationLocked = m['classification_locked'];
+    if (classificationLocked == 1 || classificationLocked == true) {
+      parsedType = existingType == 'goal' ? 'goal' : 'task';
+    } else if (existingType == 'goal') {
       parsedType = 'goal';
     } else if (parsedDue != null &&
         parsedCreated != null &&
@@ -196,9 +204,11 @@ class Todo {
       description: (m['description'] ?? '') as String,
       category: (m['category'] ?? 'General') as String,
       dueDate: parsedDue,
-      reminderDateTime: (m['reminderDateTime'] ?? m['reminder_date_time']) != null
-          ? DateTime.tryParse((m['reminderDateTime'] ?? m['reminder_date_time']).toString())
-          : null,
+      reminderDateTime:
+          (m['reminderDateTime'] ?? m['reminder_date_time']) != null
+              ? DateTime.tryParse(
+                  (m['reminderDateTime'] ?? m['reminder_date_time']).toString())
+              : null,
       priority: (m['priority'] is num)
           ? (m['priority'] as num).toInt()
           : int.tryParse('${m['priority']}') ?? 4,
@@ -206,25 +216,40 @@ class Todo {
           ? (m['timeSpentSeconds'] as num).toInt()
           : (m['time_spent_seconds'] is num)
               ? (m['time_spent_seconds'] as num).toInt()
-              : int.tryParse('${m['timeSpentSeconds'] ?? m['time_spent_seconds']}') ?? 0,
+              : int.tryParse(
+                      '${m['timeSpentSeconds'] ?? m['time_spent_seconds']}') ??
+                  0,
       targetMinutes: (m['targetMinutes'] is num)
           ? (m['targetMinutes'] as num).toInt()
           : (m['target_minutes'] is num)
               ? (m['target_minutes'] as num).toInt()
-              : int.tryParse('${m['targetMinutes'] ?? m['target_minutes']}') ?? 0,
-      completed: (m['completed'] == true || m['completed'] == 1 || m['completed'] == 'true'),
+              : int.tryParse('${m['targetMinutes'] ?? m['target_minutes']}') ??
+                  0,
+      completed: (m['completed'] == true ||
+          m['completed'] == 1 ||
+          m['completed'] == 'true'),
       type: parsedType,
       createdAt: parsedCreated,
       updatedAt: (m['updatedAt'] ?? m['updated_at']) != null
-          ? DateTime.tryParse((m['updatedAt'] ?? m['updated_at']).toString()) ?? DateTime.now()
+          ? DateTime.tryParse((m['updatedAt'] ?? m['updated_at']).toString()) ??
+              DateTime.now()
           : DateTime.now(),
-      isSynced: (m['isSynced'] == true || m['isSynced'] == 1 || m['isSynced'] == 'true' || m['is_synced'] == 1 || m['is_synced'] == true),
-      isDeleted: (m['isDeleted'] == true || m['isDeleted'] == 1 || m['isDeleted'] == 'true' || m['is_deleted'] == 1 || m['is_deleted'] == true),
+      isSynced: (m['isSynced'] == true ||
+          m['isSynced'] == 1 ||
+          m['isSynced'] == 'true' ||
+          m['is_synced'] == 1 ||
+          m['is_synced'] == true),
+      isDeleted: (m['isDeleted'] == true ||
+          m['isDeleted'] == 1 ||
+          m['isDeleted'] == 'true' ||
+          m['is_deleted'] == 1 ||
+          m['is_deleted'] == true),
     );
   }
 
   factory Todo.fromSqlite(Map<String, dynamic> m) {
-    final createdRaw = m['created_at']?.toString() ?? m['updated_at']?.toString();
+    final createdRaw =
+        m['created_at']?.toString() ?? m['updated_at']?.toString();
     final parsedCreated = (createdRaw != null && createdRaw.isNotEmpty)
         ? DateTime.tryParse(createdRaw)
         : null;
@@ -235,7 +260,10 @@ class Todo {
 
     final existingType = m['type']?.toString();
     String parsedType;
-    if (existingType == 'goal') {
+    final classificationLocked = m['classification_locked'];
+    if (classificationLocked == 1 || classificationLocked == true) {
+      parsedType = existingType == 'goal' ? 'goal' : 'task';
+    } else if (existingType == 'goal') {
       parsedType = 'goal';
     } else if (parsedDue != null &&
         parsedCreated != null &&

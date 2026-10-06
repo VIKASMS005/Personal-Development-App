@@ -13,8 +13,9 @@ import '../models/timetable_slot.dart';
 import '../models/chat_message.dart';
 import '../models/reminder.dart';
 import '../models/alarm_model.dart';
-import 'package:uuid/uuid.dart';
+
 import '../models/step_record.dart';
+import '../models/screen_time_record.dart';
 
 class DatabaseService {
   static final DatabaseService instance = DatabaseService._internal();
@@ -80,57 +81,76 @@ class DatabaseService {
         ''');
         // Ensure reminder_date_time, time_spent_seconds, category, target_minutes, type, created_at exist on todos
         try {
-          await db.execute('ALTER TABLE todos ADD COLUMN reminder_date_time TEXT');
+          await db
+              .execute('ALTER TABLE todos ADD COLUMN reminder_date_time TEXT');
         } catch (_) {}
         try {
-          await db.execute('ALTER TABLE todos ADD COLUMN time_spent_seconds INTEGER DEFAULT 0');
+          await db.execute(
+              'ALTER TABLE todos ADD COLUMN time_spent_seconds INTEGER DEFAULT 0');
         } catch (_) {}
         try {
-          await db.execute('ALTER TABLE todos ADD COLUMN category TEXT DEFAULT "General"');
+          await db.execute(
+              'ALTER TABLE todos ADD COLUMN category TEXT DEFAULT "General"');
         } catch (_) {}
         try {
-          await db.execute('ALTER TABLE todos ADD COLUMN target_minutes INTEGER DEFAULT 0');
+          await db.execute(
+              'ALTER TABLE todos ADD COLUMN target_minutes INTEGER DEFAULT 0');
         } catch (_) {}
         try {
-          await db.execute('ALTER TABLE todos ADD COLUMN type TEXT DEFAULT "task"');
+          await db
+              .execute('ALTER TABLE todos ADD COLUMN type TEXT DEFAULT "task"');
         } catch (_) {}
         try {
           await db.execute('ALTER TABLE todos ADD COLUMN created_at TEXT');
         } catch (_) {}
+        try {
+          await db.execute(
+              'ALTER TABLE todos ADD COLUMN classification_locked INTEGER DEFAULT 0');
+        } catch (_) {}
         // Backfill created_at from updated_at for pre-existing records where created_at is NULL
         try {
-          await db.execute('UPDATE todos SET created_at = updated_at WHERE created_at IS NULL AND updated_at IS NOT NULL');
+          await db.execute(
+              'UPDATE todos SET created_at = updated_at WHERE created_at IS NULL AND updated_at IS NOT NULL');
         } catch (_) {}
         // ── CRITICAL: recover any records saved with uid='' (bug from form saves that dropped uid) ──
         // These records are invisible on reload because queries filter WHERE uid='local_user'.
         // Re-assign them to 'local_user' so they appear correctly after app restart.
         try {
-          await db.execute("UPDATE todos SET uid = 'local_user' WHERE uid = '' OR uid IS NULL");
+          await db.execute(
+              "UPDATE todos SET uid = 'local_user' WHERE uid = '' OR uid IS NULL");
         } catch (_) {}
         try {
-          await db.execute("UPDATE journal_entries SET uid = 'local_user' WHERE uid = '' OR uid IS NULL");
+          await db.execute(
+              "UPDATE journal_entries SET uid = 'local_user' WHERE uid = '' OR uid IS NULL");
         } catch (_) {}
         try {
-          await db.execute("UPDATE habits SET uid = 'local_user' WHERE uid = '' OR uid IS NULL");
+          await db.execute(
+              "UPDATE habits SET uid = 'local_user' WHERE uid = '' OR uid IS NULL");
         } catch (_) {}
         try {
-          await db.execute("UPDATE finance_transactions SET uid = 'local_user' WHERE uid = '' OR uid IS NULL");
+          await db.execute(
+              "UPDATE finance_transactions SET uid = 'local_user' WHERE uid = '' OR uid IS NULL");
         } catch (_) {}
         try {
-          await db.execute("UPDATE calendar_events SET uid = 'local_user' WHERE uid = '' OR uid IS NULL");
+          await db.execute(
+              "UPDATE calendar_events SET uid = 'local_user' WHERE uid = '' OR uid IS NULL");
         } catch (_) {}
         try {
-          await db.execute("UPDATE timetable_slots SET uid = 'local_user' WHERE uid = '' OR uid IS NULL");
+          await db.execute(
+              "UPDATE timetable_slots SET uid = 'local_user' WHERE uid = '' OR uid IS NULL");
         } catch (_) {}
         // Ensure phone_number, photo_path, focus_areas exist on user_profiles
         try {
-          await db.execute('ALTER TABLE user_profiles ADD COLUMN phone_number TEXT');
+          await db.execute(
+              'ALTER TABLE user_profiles ADD COLUMN phone_number TEXT');
         } catch (_) {}
         try {
-          await db.execute("ALTER TABLE journal_entries ADD COLUMN title TEXT DEFAULT ''");
+          await db.execute(
+              "ALTER TABLE journal_entries ADD COLUMN title TEXT DEFAULT ''");
         } catch (_) {}
         try {
-          await db.execute("ALTER TABLE timetable_slots ADD COLUMN last_completed_date TEXT DEFAULT NULL");
+          await db.execute(
+              "ALTER TABLE timetable_slots ADD COLUMN last_completed_date TEXT DEFAULT NULL");
         } catch (_) {}
         // Ensure step_records table exists
         await db.execute('''
@@ -146,12 +166,21 @@ class DatabaseService {
             updated_at TEXT
           )
         ''');
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS screen_time_records (
+            uid TEXT,
+            date TEXT,
+            total_seconds INTEGER DEFAULT 0,
+            app_usages_json TEXT,
+            updated_at TEXT,
+            PRIMARY KEY (uid, date)
+          )
+        ''');
 
         // Deduplicate any pre-existing step records for the same calendar date
         await _consolidateStepRecords(db);
-
-        // Self-heal step records so steps walked yesterday are not attributed to today
-        await _repairMisassignedStepRecords(db);
+        // Note: _repairMisassignedStepRecords has been removed (FIX C4) — it incorrectly
+        // moved today's steps to yesterday whenever yesterday had 0 steps, causing data loss.
 
         // Ensure unique index on (uid, date) to permanently prevent duplicate date rows
         try {
@@ -195,6 +224,7 @@ class DatabaseService {
         target_minutes INTEGER DEFAULT 0,
         completed INTEGER DEFAULT 0,
         type TEXT DEFAULT 'task',
+        classification_locked INTEGER DEFAULT 1,
         created_at TEXT,
         updated_at TEXT,
         is_synced INTEGER DEFAULT 0,
@@ -327,12 +357,24 @@ class DatabaseService {
         updated_at TEXT
       )
     ''');
+
+    await db.execute('''
+      CREATE TABLE screen_time_records (
+        uid TEXT,
+        date TEXT,
+        total_seconds INTEGER DEFAULT 0,
+        app_usages_json TEXT,
+        updated_at TEXT,
+        PRIMARY KEY (uid, date)
+      )
+    ''');
   }
 
   // ==================== USER PROFILE ====================
   Future<UserProfile?> getProfile(String uid) async {
     final db = await database;
-    final res = await db.query('user_profiles', where: 'uid = ?', whereArgs: [uid]);
+    final res =
+        await db.query('user_profiles', where: 'uid = ?', whereArgs: [uid]);
     if (res.isNotEmpty) {
       final map = res.first;
       return UserProfile(
@@ -342,7 +384,8 @@ class DatabaseService {
         bio: (map['bio'] ?? '') as String,
         phoneNumber: (map['phone_number'] ?? '') as String,
         photoPath: map['photo_path'] as String?,
-        updatedAt: DateTime.tryParse((map['updated_at'] ?? '').toString()) ?? DateTime.now(),
+        updatedAt: DateTime.tryParse((map['updated_at'] ?? '').toString()) ??
+            DateTime.now(),
         isSynced: map['is_synced'] == 1,
       );
     }
@@ -364,7 +407,8 @@ class DatabaseService {
 
     // Ensure legacy records have created_at backfilled from updated_at if created_at is null
     try {
-      await db.execute('UPDATE todos SET created_at = updated_at WHERE created_at IS NULL AND updated_at IS NOT NULL');
+      await db.execute(
+          'UPDATE todos SET created_at = updated_at WHERE created_at IS NULL AND updated_at IS NOT NULL');
     } catch (_) {}
 
     final res = await db.query(
@@ -375,15 +419,12 @@ class DatabaseService {
     );
     final todos = res.map((m) => Todo.fromSqlite(m)).toList();
 
-    // ── Automated One-Time Migration for Existing Misclassified Tasks ───────
-    // Check if any item in SQLite needs permanent type update to 'goal' or created_at saved.
     final toMigrate = <Todo>[];
     for (final item in todos) {
-      if (item.type == 'goal') {
-        final rawMatch = res.firstWhere((m) => m['id'] == item.id, orElse: () => {});
-        if (rawMatch['type'] != 'goal' || rawMatch['created_at'] == null) {
-          toMigrate.add(item);
-        }
+      final rawMatch =
+          res.firstWhere((m) => m['id'] == item.id, orElse: () => {});
+      if (rawMatch['classification_locked'] != 1) {
+        toMigrate.add(item);
       }
     }
 
@@ -393,8 +434,10 @@ class DatabaseService {
         batch.update(
           'todos',
           {
-            'type': 'goal',
-            if (item.createdAt != null) 'created_at': item.createdAt!.toIso8601String(),
+            'type': item.type,
+            'classification_locked': 1,
+            if (item.createdAt != null)
+              'created_at': item.createdAt!.toIso8601String(),
           },
           where: 'id = ?',
           whereArgs: [item.id],
@@ -408,14 +451,19 @@ class DatabaseService {
 
   Future<void> upsertTodo(Todo todo) async {
     final db = await database;
-    await db.insert('todos', todo.toSqliteMap(), conflictAlgorithm: ConflictAlgorithm.replace);
+    await db.insert('todos', todo.toSqliteMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   Future<void> softDeleteTodo(String id) async {
     final db = await database;
     await db.update(
       'todos',
-      {'is_deleted': 1, 'is_synced': 0, 'updated_at': DateTime.now().toIso8601String()},
+      {
+        'is_deleted': 1,
+        'is_synced': 0,
+        'updated_at': DateTime.now().toIso8601String()
+      },
       where: 'id = ?',
       whereArgs: [id],
     );
@@ -435,14 +483,19 @@ class DatabaseService {
 
   Future<void> upsertHabit(Habit habit) async {
     final db = await database;
-    await db.insert('habits', habit.toSqliteMap(), conflictAlgorithm: ConflictAlgorithm.replace);
+    await db.insert('habits', habit.toSqliteMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   Future<void> softDeleteHabit(String id) async {
     final db = await database;
     await db.update(
       'habits',
-      {'is_deleted': 1, 'is_synced': 0, 'updated_at': DateTime.now().toIso8601String()},
+      {
+        'is_deleted': 1,
+        'is_synced': 0,
+        'updated_at': DateTime.now().toIso8601String()
+      },
       where: 'id = ?',
       whereArgs: [id],
     );
@@ -462,14 +515,19 @@ class DatabaseService {
 
   Future<void> upsertJournal(JournalEntry entry) async {
     final db = await database;
-    await db.insert('journal_entries', entry.toSqliteMap(), conflictAlgorithm: ConflictAlgorithm.replace);
+    await db.insert('journal_entries', entry.toSqliteMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   Future<void> softDeleteJournal(String id) async {
     final db = await database;
     await db.update(
       'journal_entries',
-      {'is_deleted': 1, 'is_synced': 0, 'updated_at': DateTime.now().toIso8601String()},
+      {
+        'is_deleted': 1,
+        'is_synced': 0,
+        'updated_at': DateTime.now().toIso8601String()
+      },
       where: 'id = ?',
       whereArgs: [id],
     );
@@ -489,14 +547,19 @@ class DatabaseService {
 
   Future<void> upsertTransaction(FinanceTransaction tx) async {
     final db = await database;
-    await db.insert('finance_transactions', tx.toSqliteMap(), conflictAlgorithm: ConflictAlgorithm.replace);
+    await db.insert('finance_transactions', tx.toSqliteMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   Future<void> softDeleteTransaction(String id) async {
     final db = await database;
     await db.update(
       'finance_transactions',
-      {'is_deleted': 1, 'is_synced': 0, 'updated_at': DateTime.now().toIso8601String()},
+      {
+        'is_deleted': 1,
+        'is_synced': 0,
+        'updated_at': DateTime.now().toIso8601String()
+      },
       where: 'id = ?',
       whereArgs: [id],
     );
@@ -516,21 +579,27 @@ class DatabaseService {
 
   Future<void> upsertCalendarEvent(CalendarEvent event) async {
     final db = await database;
-    await db.insert('calendar_events', event.toSqliteMap(), conflictAlgorithm: ConflictAlgorithm.replace);
+    await db.insert('calendar_events', event.toSqliteMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   Future<void> softDeleteCalendarEvent(String id) async {
     final db = await database;
     await db.update(
       'calendar_events',
-      {'is_deleted': 1, 'is_synced': 0, 'updated_at': DateTime.now().toIso8601String()},
+      {
+        'is_deleted': 1,
+        'is_synced': 0,
+        'updated_at': DateTime.now().toIso8601String()
+      },
       where: 'id = ?',
       whereArgs: [id],
     );
   }
 
   // ==================== TIMETABLE SLOTS ====================
-  Future<List<TimetableSlot>> getTimetableSlots(String uid, {String? dayOfWeek}) async {
+  Future<List<TimetableSlot>> getTimetableSlots(String uid,
+      {String? dayOfWeek}) async {
     final db = await database;
     String where = 'uid = ? AND is_deleted = 0';
     List<dynamic> whereArgs = [uid];
@@ -549,14 +618,16 @@ class DatabaseService {
 
   Future<void> upsertTimetableSlot(TimetableSlot slot) async {
     final db = await database;
-    await db.insert('timetable_slots', slot.toSqliteMap(), conflictAlgorithm: ConflictAlgorithm.replace);
+    await db.insert('timetable_slots', slot.toSqliteMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   Future<void> batchInsertTimetableSlots(List<TimetableSlot> slots) async {
     final db = await database;
     final batch = db.batch();
     for (final slot in slots) {
-      batch.insert('timetable_slots', slot.toSqliteMap(), conflictAlgorithm: ConflictAlgorithm.replace);
+      batch.insert('timetable_slots', slot.toSqliteMap(),
+          conflictAlgorithm: ConflictAlgorithm.replace);
     }
     await batch.commit(noResult: true);
   }
@@ -565,7 +636,11 @@ class DatabaseService {
     final db = await database;
     await db.update(
       'timetable_slots',
-      {'is_deleted': 1, 'is_synced': 0, 'updated_at': DateTime.now().toIso8601String()},
+      {
+        'is_deleted': 1,
+        'is_synced': 0,
+        'updated_at': DateTime.now().toIso8601String()
+      },
       where: 'id = ?',
       whereArgs: [id],
     );
@@ -585,12 +660,14 @@ class DatabaseService {
 
   Future<void> insertChatMessage(ChatMessage msg) async {
     final db = await database;
-    await db.insert('chat_messages', msg.toSqliteMap(), conflictAlgorithm: ConflictAlgorithm.replace);
+    await db.insert('chat_messages', msg.toSqliteMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   Future<void> markChatActionApplied(String id) async {
     final db = await database;
-    await db.update('chat_messages', {'is_applied': 1}, where: 'id = ?', whereArgs: [id]);
+    await db.update('chat_messages', {'is_applied': 1},
+        where: 'id = ?', whereArgs: [id]);
   }
 
   Future<void> clearChatMessages(String uid) async {
@@ -599,16 +676,25 @@ class DatabaseService {
   }
 
   // ==================== SYNC HELPERS ====================
-  Future<Map<String, List<Map<String, dynamic>>>> getUnsyncedRecords(String uid) async {
+  Future<Map<String, List<Map<String, dynamic>>>> getUnsyncedRecords(
+      String uid) async {
     final db = await database;
-    final todos = await db.query('todos', where: 'uid = ? AND is_synced = 0', whereArgs: [uid]);
-    final habits = await db.query('habits', where: 'uid = ? AND is_synced = 0', whereArgs: [uid]);
-    final journals = await db.query('journal_entries', where: 'uid = ? AND is_synced = 0', whereArgs: [uid]);
-    final transactions = await db.query('finance_transactions', where: 'uid = ? AND is_synced = 0', whereArgs: [uid]);
-    final events = await db.query('calendar_events', where: 'uid = ? AND is_synced = 0', whereArgs: [uid]);
-    final slots = await db.query('timetable_slots', where: 'uid = ? AND is_synced = 0', whereArgs: [uid]);
-    final reminders = await db.query('reminders', where: 'uid = ? AND is_synced = 0', whereArgs: [uid]);
-    final profile = await db.query('user_profiles', where: 'uid = ? AND is_synced = 0', whereArgs: [uid]);
+    final todos = await db
+        .query('todos', where: 'uid = ? AND is_synced = 0', whereArgs: [uid]);
+    final habits = await db
+        .query('habits', where: 'uid = ? AND is_synced = 0', whereArgs: [uid]);
+    final journals = await db.query('journal_entries',
+        where: 'uid = ? AND is_synced = 0', whereArgs: [uid]);
+    final transactions = await db.query('finance_transactions',
+        where: 'uid = ? AND is_synced = 0', whereArgs: [uid]);
+    final events = await db.query('calendar_events',
+        where: 'uid = ? AND is_synced = 0', whereArgs: [uid]);
+    final slots = await db.query('timetable_slots',
+        where: 'uid = ? AND is_synced = 0', whereArgs: [uid]);
+    final reminders = await db.query('reminders',
+        where: 'uid = ? AND is_synced = 0', whereArgs: [uid]);
+    final profile = await db.query('user_profiles',
+        where: 'uid = ? AND is_synced = 0', whereArgs: [uid]);
 
     return {
       'todos': todos,
@@ -629,14 +715,25 @@ class DatabaseService {
 
   Future<void> markProfileSynced(String uid) async {
     final db = await database;
-    await db.update('user_profiles', {'is_synced': 1}, where: 'uid = ?', whereArgs: [uid]);
+    await db.update('user_profiles', {'is_synced': 1},
+        where: 'uid = ?', whereArgs: [uid]);
   }
 
   Future<int> getTotalLocalRecordsCount(String uid) async {
     final db = await database;
     int count = 0;
-    for (final table in ['todos', 'habits', 'journal_entries', 'finance_transactions', 'calendar_events', 'timetable_slots', 'reminders']) {
-      final res = Sqflite.firstIntValue(await db.rawQuery('SELECT COUNT(*) FROM $table WHERE uid = ? AND is_deleted = 0', [uid]));
+    for (final table in [
+      'todos',
+      'habits',
+      'journal_entries',
+      'finance_transactions',
+      'calendar_events',
+      'timetable_slots',
+      'reminders'
+    ]) {
+      final res = Sqflite.firstIntValue(await db.rawQuery(
+          'SELECT COUNT(*) FROM $table WHERE uid = ? AND is_deleted = 0',
+          [uid]));
       count += (res ?? 0);
     }
     return count;
@@ -645,17 +742,20 @@ class DatabaseService {
   // ==================== REMINDERS ====================
   Future<void> insertReminder(Reminder r) async {
     final db = await database;
-    await db.insert('reminders', r.toSqliteMap(), conflictAlgorithm: ConflictAlgorithm.replace);
+    await db.insert('reminders', r.toSqliteMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   Future<void> updateReminder(Reminder r) async {
     final db = await database;
-    await db.update('reminders', r.toSqliteMap(), where: 'id = ?', whereArgs: [r.id]);
+    await db.update('reminders', r.toSqliteMap(),
+        where: 'id = ?', whereArgs: [r.id]);
   }
 
   Future<void> deleteReminder(String id) async {
     final db = await database;
-    await db.update('reminders', {'is_deleted': 1, 'is_synced': 0}, where: 'id = ?', whereArgs: [id]);
+    await db.update('reminders', {'is_deleted': 1, 'is_synced': 0},
+        where: 'id = ?', whereArgs: [id]);
   }
 
   Future<List<Reminder>> getReminders(String uid) async {
@@ -682,12 +782,14 @@ class DatabaseService {
   // ==================== ALARMS ====================
   Future<void> insertAlarm(AlarmModel alarm) async {
     final db = await database;
-    await db.insert('alarms', alarm.toMap(), conflictAlgorithm: ConflictAlgorithm.replace);
+    await db.insert('alarms', alarm.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   Future<void> updateAlarm(AlarmModel alarm) async {
     final db = await database;
-    await db.update('alarms', alarm.toMap(), where: 'id = ?', whereArgs: [alarm.id]);
+    await db.update('alarms', alarm.toMap(),
+        where: 'id = ?', whereArgs: [alarm.id]);
   }
 
   Future<void> deleteAlarm(String id) async {
@@ -709,10 +811,12 @@ class DatabaseService {
   // ==================== TASK TIME SESSIONS & TRACKER ====================
   Future<void> insertTaskSession(TaskSession session) async {
     final db = await database;
-    await db.insert('task_sessions', session.toSqliteMap(), conflictAlgorithm: ConflictAlgorithm.replace);
+    await db.insert('task_sessions', session.toSqliteMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
-  Future<List<TaskSession>> getTaskSessionsForDay(String uid, String dateStr) async {
+  Future<List<TaskSession>> getTaskSessionsForDay(
+      String uid, String dateStr) async {
     final db = await database;
     final res = await db.query(
       'task_sessions',
@@ -723,7 +827,8 @@ class DatabaseService {
     return res.map((m) => TaskSession.fromMap(m)).toList();
   }
 
-  Future<List<TaskSession>> getTaskSessionsForRange(String uid, String startDate, String endDate) async {
+  Future<List<TaskSession>> getTaskSessionsForRange(
+      String uid, String startDate, String endDate) async {
     final db = await database;
     final res = await db.query(
       'task_sessions',
@@ -747,8 +852,9 @@ class DatabaseService {
 
   // ==================== STEP RECORDS ====================
 
-  /// Consolidates any duplicate rows for the same (uid, date), summing step metrics
-  /// and preserving a single canonical row per calendar date.
+  /// Consolidates any duplicate rows for the same (uid, date) into one canonical row.
+  /// FIX H3: Uses MAX(step_count) instead of SUM to avoid double-counting daily totals.
+  /// Both duplicate rows represent the SAME day's total, not additive increments.
   static Future<void> _consolidateStepRecords(Database db) async {
     try {
       final dupes = await db.rawQuery('''
@@ -767,23 +873,30 @@ class DatabaseService {
           'step_records',
           where: uid != null ? 'uid = ? AND date = ?' : 'date = ?',
           whereArgs: uid != null ? [uid, date] : [date],
-          orderBy: 'updated_at ASC',
+          orderBy:
+              'updated_at DESC', // Most recently updated first — most authoritative
         );
 
         if (records.length <= 1) continue;
 
-        int totalSteps = 0;
-        double totalCalories = 0.0;
-        double totalDistance = 0.0;
-        int totalActiveMins = 0;
+        // FIX H3: For daily step totals, use MAX not SUM.
+        // Each row already represents the day's cumulative total — summing would double-count.
+        int maxSteps = 0;
+        double maxCalories = 0.0;
+        double maxDistance = 0.0;
+        int maxActiveMins = 0;
         int maxGoal = 6000;
-        final keeperId = records.first['id'] as String;
+        final keeperId =
+            records.first['id'] as String; // Most recently updated row
 
         for (final r in records) {
-          totalSteps += (r['step_count'] as num?)?.toInt() ?? 0;
-          totalCalories += (r['calories'] as num?)?.toDouble() ?? 0.0;
-          totalDistance += (r['distance_km'] as num?)?.toDouble() ?? 0.0;
-          totalActiveMins += (r['active_minutes'] as num?)?.toInt() ?? 0;
+          final s = (r['step_count'] as num?)?.toInt() ?? 0;
+          if (s > maxSteps) {
+            maxSteps = s;
+            maxCalories = (r['calories'] as num?)?.toDouble() ?? 0.0;
+            maxDistance = (r['distance_km'] as num?)?.toDouble() ?? 0.0;
+            maxActiveMins = (r['active_minutes'] as num?)?.toInt() ?? 0;
+          }
           final g = (r['goal'] as num?)?.toInt() ?? 6000;
           if (g > maxGoal) maxGoal = g;
         }
@@ -798,11 +911,11 @@ class DatabaseService {
           'id': keeperId,
           'uid': uid ?? '',
           'date': date,
-          'step_count': totalSteps,
+          'step_count': maxSteps,
           'goal': maxGoal,
-          'calories': totalCalories,
-          'distance_km': totalDistance,
-          'active_minutes': totalActiveMins,
+          'calories': maxCalories,
+          'distance_km': maxDistance,
+          'active_minutes': maxActiveMins,
           'updated_at': DateTime.now().toIso8601String(),
         });
       }
@@ -811,85 +924,11 @@ class DatabaseService {
     }
   }
 
-  /// Self-heals step records so steps walked yesterday (e.g. Sep 3) are not erroneously
-  /// attributed to today (e.g. Sep 4).
-  Future<void> _repairMisassignedStepRecords(Database db) async {
-    try {
-      final now = DateTime.now();
-      final todayStr = '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
-      final yesterday = DateTime(now.year, now.month, now.day - 1);
-      final yesterdayStr = '${yesterday.year.toString().padLeft(4, '0')}-${yesterday.month.toString().padLeft(2, '0')}-${yesterday.day.toString().padLeft(2, '0')}';
-
-      final rows = await db.rawQuery('SELECT DISTINCT uid FROM step_records');
-      for (final r in rows) {
-        final uid = r['uid'] as String? ?? 'local_user';
-        final todayRows = await db.query(
-          'step_records',
-          where: 'uid = ? AND date = ?',
-          whereArgs: [uid, todayStr],
-        );
-        final yesterdayRows = await db.query(
-          'step_records',
-          where: 'uid = ? AND date = ?',
-          whereArgs: [uid, yesterdayStr],
-        );
-
-        if (todayRows.isNotEmpty) {
-          final todaySteps = (todayRows.first['step_count'] as num?)?.toInt() ?? 0;
-          final yesterdaySteps = yesterdayRows.isNotEmpty
-              ? ((yesterdayRows.first['step_count'] as num?)?.toInt() ?? 0)
-              : 0;
-
-          // If today has steps from yesterday's walk while yesterday has 0:
-          if (todaySteps > 0 && yesterdaySteps == 0) {
-            if (yesterdayRows.isEmpty) {
-              await db.insert('step_records', {
-                'id': const Uuid().v4(),
-                'uid': uid,
-                'date': yesterdayStr,
-                'step_count': todaySteps,
-                'goal': (todayRows.first['goal'] as num?)?.toInt() ?? 6000,
-                'calories': todaySteps * 0.04,
-                'distance_km': (todaySteps * 0.762) / 1000.0,
-                'active_minutes': (todaySteps / 100.0).round(),
-                'updated_at': DateTime(yesterday.year, yesterday.month, yesterday.day, 23, 59).toIso8601String(),
-              });
-            } else {
-              await db.update(
-                'step_records',
-                {
-                  'step_count': todaySteps,
-                  'calories': todaySteps * 0.04,
-                  'distance_km': (todaySteps * 0.762) / 1000.0,
-                  'active_minutes': (todaySteps / 100.0).round(),
-                  'updated_at': DateTime(yesterday.year, yesterday.month, yesterday.day, 23, 59).toIso8601String(),
-                },
-                where: 'uid = ? AND date = ?',
-                whereArgs: [uid, yesterdayStr],
-              );
-            }
-
-            // Reset today's steps to 0
-            await db.update(
-              'step_records',
-              {
-                'step_count': 0,
-                'calories': 0.0,
-                'distance_km': 0.0,
-                'active_minutes': 0,
-                'updated_at': DateTime.now().toIso8601String(),
-              },
-              where: 'uid = ? AND date = ?',
-              whereArgs: [uid, todayStr],
-            );
-            debugPrint('[DatabaseService] Successfully repaired step records: migrated $todaySteps steps to $yesterdayStr, reset $todayStr to 0.');
-          }
-        }
-      }
-    } catch (e) {
-      debugPrint('[DatabaseService] _repairMisassignedStepRecords error: $e');
-    }
-  }
+  // FIX C4: _repairMisassignedStepRecords has been REMOVED.
+  // The old logic moved today's steps to yesterday whenever yesterday was empty,
+  // which caused data loss for legitimate first-day-of-use step data. The correct
+  // approach is to let the native StepDbHelper and Dart _processRawSteps handle
+  // date rollover correctly using baseline arithmetic, not after-the-fact DB repairs.
 
   Future<void> upsertStepRecord(StepRecord record) async {
     final db = await database;
@@ -928,33 +967,20 @@ class DatabaseService {
     if (res.isEmpty) return null;
     if (res.length == 1) return StepRecord.fromMap(res.first);
 
-    // If multiple rows existed, aggregate into one unified record
-    int steps = 0;
-    double cal = 0.0;
-    double dist = 0.0;
-    int mins = 0;
-    int goal = 6000;
-    for (final m in res) {
-      steps += (m['step_count'] as num?)?.toInt() ?? 0;
-      cal += (m['calories'] as num?)?.toDouble() ?? 0.0;
-      dist += (m['distance_km'] as num?)?.toDouble() ?? 0.0;
-      mins += (m['active_minutes'] as num?)?.toInt() ?? 0;
-      final g = (m['goal'] as num?)?.toInt() ?? 6000;
-      if (g > goal) goal = g;
+    // If multiple rows exist for the same (uid, date), they are duplicates of the
+    // same cumulative daily total — NOT independent incremental records.
+    // Use MAX step_count (most steps ever seen today), not SUM (would double-count).
+    // Use the row with the highest step_count as the canonical record.
+    StepRecord best = StepRecord.fromMap(res.first);
+    for (final m in res.skip(1)) {
+      final r = StepRecord.fromMap(m);
+      if (r.stepCount > best.stepCount) best = r;
     }
-    return StepRecord(
-      id: res.first['id']?.toString(),
-      uid: uid,
-      date: date,
-      stepCount: steps,
-      goal: goal,
-      calories: cal,
-      distanceKm: dist,
-      activeMinutes: mins,
-    );
+    return best;
   }
 
-  Future<List<StepRecord>> getStepRecordsForRange(String uid, String startDate, String endDate) async {
+  Future<List<StepRecord>> getStepRecordsForRange(
+      String uid, String startDate, String endDate) async {
     final db = await database;
     final res = await db.query(
       'step_records',
@@ -967,12 +993,10 @@ class DatabaseService {
       final record = StepRecord.fromMap(m);
       if (uniqueMap.containsKey(record.date)) {
         final existing = uniqueMap[record.date]!;
-        uniqueMap[record.date] = existing.copyWith(
-          stepCount: existing.stepCount + record.stepCount,
-          calories: existing.calories + record.calories,
-          distanceKm: existing.distanceKm + record.distanceKm,
-          activeMinutes: existing.activeMinutes + record.activeMinutes,
-        );
+        // Use MAX — both rows are cumulative daily totals, not incremental counts.
+        if (record.stepCount > existing.stepCount) {
+          uniqueMap[record.date] = record;
+        }
       } else {
         uniqueMap[record.date] = record;
       }
@@ -988,23 +1012,43 @@ class DatabaseService {
       whereArgs: [uid],
       orderBy: 'date DESC',
     );
-    // Group and aggregate by date so callers never receive duplicate dates
+    // Group and aggregate by date so callers never receive duplicate dates.
+    // Use MAX step_count — duplicate rows are the same cumulative daily total, not increments.
     final Map<String, StepRecord> uniqueMap = {};
     for (final m in res) {
       final record = StepRecord.fromMap(m);
       if (uniqueMap.containsKey(record.date)) {
         final existing = uniqueMap[record.date]!;
-        uniqueMap[record.date] = existing.copyWith(
-          stepCount: existing.stepCount + record.stepCount,
-          calories: existing.calories + record.calories,
-          distanceKm: existing.distanceKm + record.distanceKm,
-          activeMinutes: existing.activeMinutes + record.activeMinutes,
-        );
+        if (record.stepCount > existing.stepCount) {
+          uniqueMap[record.date] = record;
+        }
       } else {
         uniqueMap[record.date] = record;
       }
     }
     return uniqueMap.values.toList()..sort((a, b) => b.date.compareTo(a.date));
+  }
+
+  Future<void> upsertScreenTimeSummary(
+      String uid, DailyScreenTimeSummary summary) async {
+    final db = await database;
+    await db.insert(
+      'screen_time_records',
+      summary.toMap(uid),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<DailyScreenTimeSummary?> getScreenTimeSummary(
+      String uid, String date) async {
+    final db = await database;
+    final rows = await db.query(
+      'screen_time_records',
+      where: 'uid = ? AND date = ?',
+      whereArgs: [uid, date],
+      limit: 1,
+    );
+    return rows.isEmpty ? null : DailyScreenTimeSummary.fromMap(rows.first);
   }
 
   // ==================== COMPLETE LOCAL STORAGE PURGE ====================
@@ -1023,6 +1067,7 @@ class DatabaseService {
       'task_sessions',
       'user_profiles',
       'step_records',
+      'screen_time_records',
     ];
 
     for (final table in tables) {
@@ -1043,15 +1088,24 @@ class DatabaseService {
 
     final todos = await db.query('todos', where: 'uid = ?', whereArgs: [uid]);
     final habits = await db.query('habits', where: 'uid = ?', whereArgs: [uid]);
-    final journals = await db.query('journal_entries', where: 'uid = ?', whereArgs: [uid]);
-    final transactions = await db.query('finance_transactions', where: 'uid = ?', whereArgs: [uid]);
-    final events = await db.query('calendar_events', where: 'uid = ?', whereArgs: [uid]);
-    final slots = await db.query('timetable_slots', where: 'uid = ?', whereArgs: [uid]);
-    final reminders = await db.query('reminders', where: 'uid = ?', whereArgs: [uid]);
+    final journals =
+        await db.query('journal_entries', where: 'uid = ?', whereArgs: [uid]);
+    final transactions = await db
+        .query('finance_transactions', where: 'uid = ?', whereArgs: [uid]);
+    final events =
+        await db.query('calendar_events', where: 'uid = ?', whereArgs: [uid]);
+    final slots =
+        await db.query('timetable_slots', where: 'uid = ?', whereArgs: [uid]);
+    final reminders =
+        await db.query('reminders', where: 'uid = ?', whereArgs: [uid]);
     final alarms = await db.query('alarms', where: 'uid = ?', whereArgs: [uid]);
-    final sessions = await db.query('task_sessions', where: 'uid = ?', whereArgs: [uid]);
-    final steps = await db.query('step_records', where: 'uid = ?', whereArgs: [uid]);
-    final profile = await db.query('user_profiles', where: 'uid = ?', whereArgs: [uid]);
+    final sessions =
+        await db.query('task_sessions', where: 'uid = ?', whereArgs: [uid]);
+    final steps =
+        await db.query('step_records', where: 'uid = ?', whereArgs: [uid]);
+    final screenTime = await db.query('screen_time_records', where: 'uid = ?', whereArgs: [uid]);
+    final profile =
+        await db.query('user_profiles', where: 'uid = ?', whereArgs: [uid]);
 
     return {
       'export_version': 1,
@@ -1067,21 +1121,179 @@ class DatabaseService {
       'alarms': alarms,
       'task_sessions': sessions,
       'step_records': steps,
+      'screen_time_records': screenTime,
       'user_profiles': profile,
     };
   }
 
   /// Imports and restores all user data from a parsed JSON backup map.
   /// Uses REPLACE conflict algorithm so existing records are overwritten.
-  Future<void> importAllData(Map<String, dynamic> data) async {
+  Future<void> importAllData(
+    Map<String, dynamic> data, {
+    required String uid,
+  }) async {
     final db = await database;
     final batch = db.batch();
+
+    const columns = <String, Set<String>>{
+      'todos': {
+        'id',
+        'title',
+        'description',
+        'category',
+        'due_date',
+        'reminder_date_time',
+        'priority',
+        'time_spent_seconds',
+        'target_minutes',
+        'completed',
+        'type',
+        'created_at',
+        'classification_locked',
+        'updated_at',
+        'is_synced',
+        'is_deleted'
+      },
+      'habits': {
+        'id',
+        'title',
+        'frequency',
+        'history_json',
+        'streak',
+        'updated_at',
+        'is_synced',
+        'is_deleted'
+      },
+      'journal_entries': {
+        'id',
+        'text',
+        'title',
+        'mood',
+        'tags_json',
+        'created_at',
+        'updated_at',
+        'is_synced',
+        'is_deleted'
+      },
+      'finance_transactions': {
+        'id',
+        'title',
+        'amount',
+        'category',
+        'date',
+        'note',
+        'updated_at',
+        'is_synced',
+        'is_deleted'
+      },
+      'calendar_events': {
+        'id',
+        'title',
+        'description',
+        'date_time',
+        'category',
+        'updated_at',
+        'is_synced',
+        'is_deleted'
+      },
+      'timetable_slots': {
+        'id',
+        'day_of_week',
+        'start_time',
+        'end_time',
+        'title',
+        'description',
+        'category',
+        'color_hex',
+        'has_reminder',
+        'is_completed',
+        'updated_at',
+        'is_synced',
+        'is_deleted',
+        'last_completed_date'
+      },
+      'reminders': {
+        'id',
+        'title',
+        'description',
+        'date_time',
+        'category',
+        'is_completed',
+        'updated_at',
+        'is_synced',
+        'is_deleted'
+      },
+      'alarms': {
+        'id',
+        'hour',
+        'minute',
+        'label',
+        'days_of_week',
+        'is_enabled',
+        'created_at'
+      },
+      'task_sessions': {
+        'id',
+        'task_id',
+        'task_title',
+        'category',
+        'duration_seconds',
+        'date',
+        'timestamp'
+      },
+      'step_records': {
+        'id',
+        'date',
+        'step_count',
+        'goal',
+        'calories',
+        'distance_km',
+        'active_minutes',
+        'updated_at'
+      },
+      'screen_time_records': {
+        'date',
+        'total_seconds',
+        'app_usages_json',
+        'updated_at',
+      },
+      'user_profiles': {
+        'uid',
+        'email',
+        'name',
+        'bio',
+        'phone_number',
+        'photo_path',
+        'focus_areas',
+        'updated_at',
+        'is_synced'
+      },
+    };
 
     void batchInsert(String table, dynamic rows) {
       if (rows is List) {
         for (final row in rows) {
           if (row is Map<String, dynamic>) {
-            batch.insert(table, row, conflictAlgorithm: ConflictAlgorithm.replace);
+            final allowed = columns[table];
+            if (allowed == null) continue;
+            final sanitized = <String, dynamic>{
+              for (final entry in row.entries)
+                if (allowed.contains(entry.key)) entry.key: entry.value,
+            };
+            if (table == 'user_profiles') {
+              sanitized['uid'] = uid;
+            } else {
+              sanitized['uid'] = uid;
+            }
+            final hasIdentity = table == 'user_profiles'
+              ? sanitized['uid'] != null
+              : table == 'screen_time_records'
+                ? sanitized['uid'] != null && sanitized['date'] is String
+                : sanitized['id'] is String &&
+                    (sanitized['id'] as String).isNotEmpty;
+            if (!hasIdentity) continue;
+            batch.insert(table, sanitized,
+                conflictAlgorithm: ConflictAlgorithm.replace);
           }
         }
       }
@@ -1097,6 +1309,7 @@ class DatabaseService {
     batchInsert('alarms', data['alarms']);
     batchInsert('task_sessions', data['task_sessions']);
     batchInsert('step_records', data['step_records']);
+    batchInsert('screen_time_records', data['screen_time_records']);
     batchInsert('user_profiles', data['user_profiles']);
 
     await batch.commit(noResult: true);

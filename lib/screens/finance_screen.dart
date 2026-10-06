@@ -198,7 +198,7 @@ class _FinanceScreenState extends State<FinanceScreen> {
         tooltip: 'Add Transaction',
         child: const Icon(Icons.add_rounded),
         onPressed: () async {
-          final tx = await FinanceForm.show(context);
+          final tx = await FinanceForm.show(context, defaultDate: _selectedDate);
           if (tx != null && auth.uid != null) {
             tx.uid = auth.uid!;
             await finance.addTransaction(tx);

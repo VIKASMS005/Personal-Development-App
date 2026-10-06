@@ -11,8 +11,11 @@ import 'screens/home_screen.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Load .env file (contains GEMINI_API_KEY)
-  await dotenv.load(fileName: '.env');
+  // AI is optional; a missing local configuration must not prevent the app
+  // from starting or make the rest of the product unavailable.
+  try {
+    await dotenv.load(fileName: '.env');
+  } catch (_) {}
 
   // Initialize SQLite database
   await DatabaseService.instance.database;
@@ -69,9 +72,7 @@ class GrowApp extends StatelessWidget {
       theme: AppTheme.light(),
       darkTheme: AppTheme.dark(),
       themeMode: themeProvider.themeMode,
-      home: auth.isLoading
-          ? const SplashScreen()
-          : const HomeScreen(),
+      home: auth.isLoading ? const SplashScreen() : const HomeScreen(),
     );
   }
 }

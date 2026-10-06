@@ -79,7 +79,7 @@ class AlarmProvider extends ChangeNotifier {
         alarmDt = alarmDt.add(const Duration(days: 1));
       }
       NotificationService.scheduleAlarm(
-        id: alarm.id.hashCode.abs() % 2147483647,
+        id: NotificationService.stableId(alarm.id),
         title: alarm.label.isNotEmpty ? alarm.label : 'Alarm ⏰',
         dateTime: alarmDt,
         body:
@@ -94,7 +94,8 @@ class AlarmProvider extends ChangeNotifier {
         if (daysUntil == 0 && alarmDt.isBefore(now)) {
           alarmDt = alarmDt.add(const Duration(days: 7));
         }
-        final notifId = (alarm.id.hashCode ^ day).abs() % 2147483647;
+        // Use stableId XOR day so each day gets a unique but reproducible ID
+        final notifId = NotificationService.stableId('${alarm.id}_day$day');
         NotificationService.scheduleAlarm(
           id: notifId,
           title: alarm.label.isNotEmpty ? alarm.label : 'Alarm ⏰',
@@ -108,9 +109,9 @@ class AlarmProvider extends ChangeNotifier {
   }
 
   void _cancelAlarmNotifications(String alarmId) {
-    NotificationService.cancelAlarm(alarmId.hashCode.abs() % 2147483647);
+    NotificationService.cancelAlarm(NotificationService.stableId(alarmId));
     for (int day = 1; day <= 7; day++) {
-      final notifId = (alarmId.hashCode ^ day).abs() % 2147483647;
+      final notifId = NotificationService.stableId('${alarmId}_day$day');
       NotificationService.cancelAlarm(notifId);
     }
   }

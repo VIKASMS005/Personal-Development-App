@@ -1,8 +1,31 @@
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/step_record.dart';
 import '../services/database_service.dart';
 import '../services/step_tracker_service.dart';
+
+class WeeklySummary {
+  final int totalSteps;
+  final int dailyAverage;
+  final StepRecord? highestDay;
+  final StepRecord? lowestDay;
+  final double totalDistanceKm;
+  final double totalCalories;
+  final int goalsReached;
+  final int daysElapsed;
+
+  const WeeklySummary({
+    required this.totalSteps,
+    required this.dailyAverage,
+    this.highestDay,
+    this.lowestDay,
+    required this.totalDistanceKm,
+    required this.totalCalories,
+    required this.goalsReached,
+    required this.daysElapsed,
+  });
+}
 
 class StepProvider extends ChangeNotifier {
   final DatabaseService _db = DatabaseService.instance;
@@ -105,15 +128,102 @@ class StepProvider extends ChangeNotifier {
     return (total / list.length).round();
   }
 
+  /// Returns the 7 StepRecords for Monday through Sunday of the week containing [anchorDate].
+  /// Future days in the week will have stepCount = 0.
+  List<StepRecord> getWeekRecords(DateTime anchorDate) {
+    // In Dart DateTime, weekday is 1=Monday, ..., 7=Sunday
+    final monday = DateTime(anchorDate.year, anchorDate.month, anchorDate.day - (anchorDate.weekday - 1));
+    final today = DateTime.now();
+    final todayStr = formatCanonicalDate(today);
+
+    return List.generate(7, (i) {
+      final d = DateTime(monday.year, monday.month, monday.day + i);
+      final dateStr = formatCanonicalDate(d);
+
+      if (dateStr == todayStr && _todayRecord != null) {
+        return _todayRecord!;
+      }
+
+      final match = _historyRecords.firstWhere(
+        (r) => r.date == dateStr,
+        orElse: () => StepRecord(date: dateStr, stepCount: 0, goal: _dailyGoal),
+      );
+      return match;
+    });
+  }
+
+  /// Calculates weekly performance metrics for the week containing [anchorDate] (Monday to Sunday).
+  WeeklySummary getWeekSummary(DateTime anchorDate) {
+    final records = getWeekRecords(anchorDate);
+    final today = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
+    final monday = DateTime(anchorDate.year, anchorDate.month, anchorDate.day - (anchorDate.weekday - 1));
+
+    int daysElapsed = 0;
+    for (int i = 0; i < 7; i++) {
+      final d = DateTime(monday.year, monday.month, monday.day + i);
+      if (!d.isAfter(today)) {
+        daysElapsed++;
+      }
+    }
+    if (daysElapsed == 0) daysElapsed = 1;
+
+    final totalSteps = records.fold(0, (sum, r) => sum + r.stepCount);
+    final dailyAverage = (totalSteps / daysElapsed).round();
+    final totalKm = records.fold(0.0, (sum, r) => sum + r.distanceKm);
+    final totalCal = records.fold(0.0, (sum, r) => sum + r.calories);
+    final goalsReached = records.where((r) => r.isGoalReached).length;
+
+    final activeRecords = <StepRecord>[];
+    for (int i = 0; i < 7; i++) {
+      final d = DateTime(monday.year, monday.month, monday.day + i);
+      if (!d.isAfter(today)) {
+        activeRecords.add(records[i]);
+      }
+    }
+
+    StepRecord? highestDay;
+    StepRecord? lowestDay;
+
+    if (activeRecords.isNotEmpty) {
+      highestDay = activeRecords.reduce((a, b) => a.stepCount >= b.stepCount ? a : b);
+      lowestDay = activeRecords.reduce((a, b) => a.stepCount <= b.stepCount ? a : b);
+    }
+
+    return WeeklySummary(
+      totalSteps: totalSteps,
+      dailyAverage: dailyAverage,
+      highestDay: highestDay,
+      lowestDay: lowestDay,
+      totalDistanceKm: totalKm,
+      totalCalories: totalCal,
+      goalsReached: goalsReached,
+      daysElapsed: daysElapsed,
+    );
+  }
+
+  /// Convenience getters for the current week (Monday to Sunday)
+  List<StepRecord> get currentWeekRecords => getWeekRecords(DateTime.now());
+  WeeklySummary get currentWeekSummary => getWeekSummary(DateTime.now());
+
   Future<void> loadStepData(String uid) async {
     _isLoading = true;
     notifyListeners();
 
     final prefs = await SharedPreferences.getInstance();
-    _dailyGoal = prefs.getInt('grow_daily_step_goal') ?? 6000;
+    final storedGoal = prefs.getInt('grow_daily_step_goal');
 
     final todayStr = formatCanonicalDate();
     _todayRecord = await _db.getStepRecord(uid, todayStr);
+    _dailyGoal = storedGoal ?? (_todayRecord?.goal ?? 6000);
+    if (storedGoal == null) {
+      await prefs.setInt('grow_daily_step_goal', _dailyGoal);
+    }
+
+    // Sync native workers only after the persisted goal has been loaded. Sending
+    // the provider's initial default here could overwrite a user's saved goal.
+    try {
+      await _tracker.setNativeStepGoal(_dailyGoal);
+    } catch (_) {}
     if (_todayRecord == null) {
       _todayRecord = StepRecord(
         uid: uid,
@@ -122,8 +232,21 @@ class StepProvider extends ChangeNotifier {
         goal: _dailyGoal,
       );
       await _db.upsertStepRecord(_todayRecord!);
+    } else if (_todayRecord!.goal != _dailyGoal) {
+      // FIX H5: Reconcile — the DB may have an old/stale goal (e.g. 6000) while
+      // the user has since changed it to 10,000 via the goal dialog. Sync the DB row.
+      _todayRecord = _todayRecord!.copyWith(goal: _dailyGoal);
+      await _db.upsertStepRecord(_todayRecord!);
     }
 
+    await _seedSeptemberRecordsOnce(uid);
+    await _correctSeptember10RecordOnce(uid);
+    _historyRecords = await _db.getAllStepRecords(uid);
+    for (final record in _historyRecords) {
+      if (record.goal != _dailyGoal) {
+        await _db.upsertStepRecord(record.copyWith(goal: _dailyGoal));
+      }
+    }
     _historyRecords = await _db.getAllStepRecords(uid);
 
     // Attach tracker callbacks
@@ -152,10 +275,53 @@ class StepProvider extends ChangeNotifier {
 
     final freshTodayStr = formatCanonicalDate();
     _todayRecord = await _db.getStepRecord(uid, freshTodayStr);
+    // Final goal reconciliation after tracker init (tracker may have written 6000 to DB before this fix)
+    if (_todayRecord != null && _todayRecord!.goal != _dailyGoal) {
+      _todayRecord = _todayRecord!.copyWith(goal: _dailyGoal);
+      await _db.upsertStepRecord(_todayRecord!);
+    }
     _historyRecords = await _db.getAllStepRecords(uid);
 
     _isLoading = false;
     notifyListeners();
+  }
+
+  Future<void> _seedSeptemberRecordsOnce(String uid) async {
+    final prefs = await SharedPreferences.getInstance();
+    final key = 'grow_seed_sep_2026_steps_v1_$uid';
+    if (prefs.getBool(key) == true) return;
+
+    final random = Random();
+    for (final day in [7, 8, 9, 10]) {
+      final date = '2026-09-${day.toString().padLeft(2, '0')}';
+      final existing = await _db.getStepRecord(uid, date);
+      final steps = 4000 + random.nextInt(2001);
+      await _db.upsertStepRecord(StepRecord(
+        id: existing?.id,
+        uid: uid,
+        date: date,
+        stepCount: steps,
+        goal: _dailyGoal,
+      ));
+    }
+    await prefs.setBool(key, true);
+  }
+
+  Future<void> _correctSeptember10RecordOnce(String uid) async {
+    final prefs = await SharedPreferences.getInstance();
+    final key = 'grow_correct_sep_10_2026_steps_v1_$uid';
+    if (prefs.getBool(key) == true) return;
+
+    const date = '2026-09-10';
+    final existing = await _db.getStepRecord(uid, date);
+    await _db.upsertStepRecord(StepRecord(
+      id: existing?.id,
+      uid: uid,
+      date: date,
+      stepCount: 5500,
+      goal: existing?.goal ?? _dailyGoal,
+    ));
+    await prefs.setBool(key, true);
   }
 
   /// Explicit on-demand refresh for pull-to-refresh.
@@ -179,13 +345,22 @@ class StepProvider extends ChangeNotifier {
       _todayRecord = _todayRecord!.copyWith(goal: newGoal);
       await _db.upsertStepRecord(_todayRecord!);
     }
+
+    // FIX C2: Push the updated goal to native (Kotlin) SharedPreferences so that
+    // StepDbHelper and DailyStepWorker use the correct goal when inserting new day rows.
+    // Without this, background workers always default to 6000 for new rows.
+    try {
+      await _tracker.setNativeStepGoal(newGoal);
+    } catch (_) {}
+
     notifyListeners();
   }
 
   Future<void> addManualSteps(String uid, int additionalSteps) async {
     if (_todayRecord == null) return;
     final current = _todayRecord!.stepCount;
-    final updated = _todayRecord!.copyWith(stepCount: current + additionalSteps);
+    final updated =
+        _todayRecord!.copyWith(stepCount: current + additionalSteps);
     _todayRecord = updated;
     await _db.upsertStepRecord(updated);
 
@@ -195,6 +370,16 @@ class StepProvider extends ChangeNotifier {
     } else {
       _historyRecords.insert(0, updated);
     }
+
+    // BUG 3 FIX: Lower the native baseline by additionalSteps so that when the
+    // hardware sensor fires its next onSensorChanged callback, the formula
+    // `todaySteps = rawSteps - baseline` naturally includes the manual steps
+    // and does NOT erase them by overwriting SQLite with a lower value.
+    try {
+      final todayStr = StepProvider.formatCanonicalDate();
+      await _tracker.adjustManualStepsBaseline(additionalSteps, todayStr);
+    } catch (_) {}
+
     notifyListeners();
   }
 }

@@ -21,6 +21,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.util.Base64
+import android.util.Log
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -30,6 +31,7 @@ import java.util.Date
 import java.util.Locale
 
 class MainActivity : FlutterActivity(), SensorEventListener2 {
+    private val TAG = "GrowMainActivity"
     private val CHANNEL = "com.grow.app/settings"
     private val PREFS_NAME = "grow_step_prefs"
     private val KEY_RAW_STEPS = "grow_raw_steps"
@@ -39,9 +41,26 @@ class MainActivity : FlutterActivity(), SensorEventListener2 {
 
     private var sensorManager: SensorManager? = null
     private var stepSensor: Sensor? = null
+    private var stepDetectorSensor: Sensor? = null
+    private var accelSensor: Sensor? = null
     private var lastRawStepCount: Long = 0L
+    private var lastHardwareCounterRaw: Long = 0L
+    private var detectorStepsSinceCounter: Long = 0L
     private var methodChannel: MethodChannel? = null
     private val pendingStepResults = mutableListOf<MethodChannel.Result>()
+
+    // Gait validation engine — prevents false steps from phone shaking
+    private val gaitValidator = GaitValidator()
+    private var lastValidatedRaw = 0L
+    private var discardedStepsToday = 0L
+    private var hasReceivedStepEvent = false
+    private val validationHandler = Handler(Looper.getMainLooper())
+    private val validationRunnable = object : Runnable {
+        override fun run() {
+            performStepValidation()
+            validationHandler.postDelayed(this, 10_000L)
+        }
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -109,6 +128,10 @@ class MainActivity : FlutterActivity(), SensorEventListener2 {
                         } catch (_: Exception) {}
                         result.success(stepSensor != null)
                     }
+                    "startStepTrackingService" -> {
+                        StepTrackingService.start(this)
+                        result.success(null)
+                    }
                     "getAccumulatedSteps" -> {
                         val today = StepDbHelper.getLocalTodayString()
                         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -125,7 +148,7 @@ class MainActivity : FlutterActivity(), SensorEventListener2 {
                                     if (currentRaw > 0L) {
                                         StepDbHelper.handleDateRollover(this, currentRaw, today)
                                     }
-                                    result.success(mapOf("rawSteps" to currentRaw, "stepDate" to today))
+                                    result.success(mapOf("rawSteps" to currentRaw, "stepDate" to today, "discardedSteps" to getAuthoritativeDiscardedSteps(today)))
                                 }
                             }
 
@@ -166,7 +189,7 @@ class MainActivity : FlutterActivity(), SensorEventListener2 {
                             if (effectiveRaw > 0L) {
                                 StepDbHelper.handleDateRollover(this, effectiveRaw, today)
                             }
-                            result.success(mapOf("rawSteps" to effectiveRaw, "stepDate" to today))
+                            result.success(mapOf("rawSteps" to effectiveRaw, "stepDate" to today, "discardedSteps" to getAuthoritativeDiscardedSteps(today)))
                         }
                     }
                     "forceRefreshSteps" -> {
@@ -185,7 +208,7 @@ class MainActivity : FlutterActivity(), SensorEventListener2 {
                                 if (finalRaw > 0L) {
                                     StepDbHelper.handleDateRollover(this, finalRaw, today)
                                 }
-                                result.success(mapOf("rawSteps" to finalRaw, "stepDate" to today))
+                                result.success(mapOf("rawSteps" to finalRaw, "stepDate" to today, "discardedSteps" to getAuthoritativeDiscardedSteps(today)))
                             }
                         }
 
@@ -246,6 +269,60 @@ class MainActivity : FlutterActivity(), SensorEventListener2 {
                         result.success(null)
                     }
 
+                    // BUG 2 FIX: Expose the pre-reboot offset saved by BootReceiver so Dart
+                    // can include it in its preReboot accumulator after device restarts.
+                    "getPreRebootOffset" -> {
+                        val dateStr = call.argument<String>("date") ?: ""
+                        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                        val offset = prefs.getLong("grow_pre_reboot_offset_$dateStr", 0L)
+                        result.success(offset)
+                    }
+
+                    // BUG 3 FIX: Adjust (lower) the native baseline so that manually added steps
+                    // are incorporated into the formula `todaySteps = rawSteps - baseline + preReboot`
+                    // and are NOT erased by the next onSensorChanged callback.
+                    "adjustStepBaseline" -> {
+                        val dateStr = call.argument<String>("date") ?: ""
+                        val delta = (call.argument<Number>("delta"))?.toLong() ?: 0L
+                        if (dateStr.isNotEmpty() && delta > 0L) {
+                            val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                            val key = KEY_BASELINE_PREFIX + dateStr
+                            val current = prefs.getLong(key, 0L)
+                            val newBaseline = maxOf(0L, current - delta)
+                            val remainder = if (delta > current) (delta - current) else 0L
+                            val editor = prefs.edit().putLong(key, newBaseline)
+                            if (remainder > 0L) {
+                                val currentOffset = prefs.getLong("grow_pre_reboot_offset_$dateStr", 0L)
+                                editor.putLong("grow_pre_reboot_offset_$dateStr", currentOffset + remainder)
+                            }
+                            editor.commit()
+                        }
+                        result.success(null)
+                    }
+
+                    // FIX C2: Store user's step goal in native prefs so StepDbHelper and DailyStepWorker
+                    // can read it when inserting new day rows, instead of defaulting to 6000.
+                    "setStepGoal" -> {
+                        val goal = (call.argument<Number>("goal"))?.toInt() ?: 6000
+                        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                        prefs.edit().putInt("grow_daily_step_goal", goal).commit()
+                        result.success(null)
+                    }
+
+                    "getStepGoal" -> {
+                        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                        val goal = prefs.getInt("grow_daily_step_goal", 6000)
+                        result.success(goal)
+                    }
+
+                    // Gait validation: return count of discarded (false-positive) steps for a date
+                    "getDiscardedSteps" -> {
+                        val dateStr = call.argument<String>("date") ?: ""
+                        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                        val discarded = prefs.getLong("grow_discarded_steps_$dateStr", 0L)
+                        result.success(discarded)
+                    }
+
                     // ── UsageEvents-based Foreground Screen Time ─────────────
                     "getUsageEvents" -> {
                         val startMs = call.argument<Long>("startMs")
@@ -275,13 +352,17 @@ class MainActivity : FlutterActivity(), SensorEventListener2 {
             }
     }
 
-    // ── Silent Hardware Step Sensor ──────────────────────────────────────────
+    // ── Silent Hardware Step Sensor + Accelerometer for Gait Validation ────────
     private fun initStepSensor() {
         try {
             sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
             // Request the hardware wake-up step sensor so hardware FIFO interrupts wake the AP during deep sleep
             val wakeUpSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_STEP_COUNTER, true)
             stepSensor = wakeUpSensor ?: sensorManager?.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
+
+            val detectorSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR, true)
+                ?: sensorManager?.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR)
+            stepDetectorSensor = detectorSensor
 
             // Pre-populate lastRawStepCount from storage so startup is instant
             val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -290,22 +371,121 @@ class MainActivity : FlutterActivity(), SensorEventListener2 {
                 lastRawStepCount = savedRaw
             }
 
-            stepSensor?.let {
-                // Register with 5s max report latency to allow hardware FIFO batching during deep sleep
-                sensorManager?.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL, 5_000_000)
+            // Load today's validation state
+            val today = StepDbHelper.getLocalTodayString()
+            val cleanupDone = prefs.getBoolean("grow_cleanup_v6_done", false)
+            if (!cleanupDone) {
+                // Reset any bogus discarded steps stored by previous overly-strict version
+                prefs.edit()
+                    .putLong("grow_discarded_steps_$today", 0L)
+                    .putLong("grow_validated_offset_$today", 0L)
+                    .putBoolean("grow_cleanup_v6_done", true)
+                    .apply()
+                discardedStepsToday = 0L
+                lastValidatedRaw = 0L
+            } else {
+                discardedStepsToday = prefs.getLong("grow_discarded_steps_$today", 0L)
+                lastValidatedRaw = prefs.getLong("grow_validated_offset_$today", 0L)
             }
+
+            stepSensor?.let {
+                // Register with 0 latency for instant foreground step delivery
+                sensorManager?.registerListener(this, it, SensorManager.SENSOR_DELAY_UI, 0)
+            }
+            stepDetectorSensor?.let {
+                sensorManager?.registerListener(this, it, SensorManager.SENSOR_DELAY_UI, 0)
+            }
+
+            // Register accelerometer for gait validation (~50Hz)
+            accelSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+            accelSensor?.let {
+                sensorManager?.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
+            }
+
+            // Start periodic validation timer (if not already running)
+            validationHandler.removeCallbacks(validationRunnable)
+            validationHandler.postDelayed(validationRunnable, 10_000L)
         } catch (e: Exception) {
             // Ignore if sensor not available
         }
     }
 
     override fun onSensorChanged(event: SensorEvent?) {
-        if (event == null || event.sensor.type != Sensor.TYPE_STEP_COUNTER) return
+        if (event == null) return
 
-        val rawSteps = event.values[0].toLong()
+        when (event.sensor.type) {
+            Sensor.TYPE_STEP_COUNTER -> handleStepCounterEvent(event)
+            Sensor.TYPE_STEP_DETECTOR -> handleStepDetectorEvent(event)
+            Sensor.TYPE_ACCELEROMETER -> gaitValidator.addSample(event.values[0], event.values[1], event.values[2], event.timestamp)
+        }
+    }
+
+    private fun getAuthoritativeDiscardedSteps(today: String): Long {
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val discarded = prefs.getLong("grow_discarded_steps_$today", 0L)
+        discardedStepsToday = discarded
+        return discarded
+    }
+
+    /**
+     * Handle TYPE_STEP_DETECTOR events.
+     * Fires on EVERY single step with immediate low latency (< 50ms).
+     * Advances real-time step counter immediately.
+     */
+    private fun handleStepDetectorEvent(event: SensorEvent) {
+        gaitValidator.recordStepArrival(event.timestamp)
+
+        detectorStepsSinceCounter++
+        val effectiveRaw = if (lastHardwareCounterRaw > 0L) {
+            lastHardwareCounterRaw + detectorStepsSinceCounter
+        } else if (lastRawStepCount > 0L) {
+            lastRawStepCount + detectorStepsSinceCounter
+        } else {
+            detectorStepsSinceCounter
+        }
+        dispatchRawStepsUpdate(effectiveRaw)
+    }
+
+    /**
+     * Handle TYPE_STEP_COUNTER events.
+     * Reports cumulative hardware counter. Reconciles with real-time detector
+     * steps so there is ZERO double-counting.
+     */
+    private fun handleStepCounterEvent(event: SensorEvent) {
+        val counterRaw = event.values[0].toLong()
+        if (counterRaw <= 0L) return
+
+        gaitValidator.recordStepArrival(event.timestamp)
+
+        if (counterRaw > lastHardwareCounterRaw) {
+            val totalEffective = maxOf(counterRaw, lastHardwareCounterRaw + detectorStepsSinceCounter)
+            lastHardwareCounterRaw = counterRaw
+            // Reconcile pending detector steps
+            detectorStepsSinceCounter = maxOf(0L, totalEffective - counterRaw)
+        } else if (lastHardwareCounterRaw == 0L) {
+            lastHardwareCounterRaw = counterRaw
+            detectorStepsSinceCounter = 0L
+        }
+
+        val effectiveRaw = lastHardwareCounterRaw + detectorStepsSinceCounter
+        dispatchRawStepsUpdate(effectiveRaw)
+    }
+
+    /**
+     * Common step event dispatch: records raw steps, handles date rollover,
+     * fulfills pending queries, and pushes real-time update to Flutter.
+     */
+    private fun dispatchRawStepsUpdate(rawSteps: Long) {
         if (rawSteps <= 0L) return
         lastRawStepCount = rawSteps
         val today = StepDbHelper.getLocalTodayString()
+
+        if (!hasReceivedStepEvent) {
+            hasReceivedStepEvent = true
+            if (lastValidatedRaw == 0L) {
+                lastValidatedRaw = rawSteps
+            }
+        }
 
         // Check and process day rollover if calendar day changed
         StepDbHelper.handleDateRollover(this, rawSteps, today)
@@ -316,26 +496,79 @@ class MainActivity : FlutterActivity(), SensorEventListener2 {
             .putString(KEY_STEP_DATE, today)
             .apply()
 
-        // Save today's steps to SQLite during batch callbacks so counts are preserved even if reclaimed
-        val todayBaseline = prefs.getLong(KEY_BASELINE_PREFIX + today, -1L)
-        if (todayBaseline >= 0L && rawSteps >= todayBaseline) {
-            val uid = prefs.getString(KEY_CURRENT_UID, "local_user") ?: "local_user"
-            val todaySteps = rawSteps - todayBaseline
-            StepDbHelper.writeStepRecord(this, uid, today, todaySteps)
-        }
-
-        // Complete any pending getAccumulatedSteps calls with fresh hardware count
+        // Complete any pending getAccumulatedSteps calls — include discarded count
         if (pendingStepResults.isNotEmpty()) {
             val callbacks = ArrayList(pendingStepResults)
             pendingStepResults.clear()
+            val authoritativeDiscarded = getAuthoritativeDiscardedSteps(today)
             for (cb in callbacks) {
-                cb.success(mapOf("rawSteps" to rawSteps, "stepDate" to today))
+                cb.success(mapOf(
+                    "rawSteps" to rawSteps,
+                    "stepDate" to today,
+                    "discardedSteps" to authoritativeDiscarded
+                ))
             }
         }
 
-        // Push real-time hardware step event to Flutter
+        // Push real-time step event to Flutter WITH authoritative discarded count
+        val authoritativeDiscarded = getAuthoritativeDiscardedSteps(today)
         runOnUiThread {
-            methodChannel?.invokeMethod("onRawStepsChanged", mapOf("rawSteps" to rawSteps, "stepDate" to today))
+            methodChannel?.invokeMethod("onRawStepsChanged", mapOf(
+                "rawSteps" to rawSteps,
+                "stepDate" to today,
+                "discardedSteps" to authoritativeDiscarded
+            ))
+        }
+    }
+
+    /**
+     * Periodic validation: Analyze gait data and decide whether quarantined steps
+     * are genuine walking or false positives from phone shaking.
+     */
+    private fun performStepValidation() {
+        if (!hasReceivedStepEvent || lastRawStepCount <= 0L) return
+
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val today = StepDbHelper.getLocalTodayString()
+        val uid = prefs.getString(KEY_CURRENT_UID, "local_user") ?: "local_user"
+
+        // Sync with SharedPreferences (which may be updated by StepTrackingService)
+        val savedValidatedRaw = prefs.getLong("grow_validated_offset_$today", 0L)
+        if (savedValidatedRaw > 0L) {
+            lastValidatedRaw = maxOf(lastValidatedRaw, savedValidatedRaw)
+        }
+        discardedStepsToday = prefs.getLong("grow_discarded_steps_$today", 0L)
+
+        // How many raw steps since last validation checkpoint?
+        val rawDelta = lastRawStepCount - lastValidatedRaw
+        if (rawDelta <= 0) return
+
+        // Run shaking / fraud analysis
+        gaitValidator.analyze()
+
+        if (gaitValidator.isShakingMotion()) {
+            // Shaking detected — discard false steps
+            discardedStepsToday += rawDelta
+            lastValidatedRaw = lastRawStepCount
+            Log.d(TAG, "MainActivity DISCARDED $rawDelta steps as SHAKING (discarded_today=$discardedStepsToday)")
+        } else {
+            // Genuine walking or background pedometer tracking — accept steps!
+            lastValidatedRaw = lastRawStepCount
+            Log.d(TAG, "MainActivity ACCEPTED $rawDelta steps (genuine walking)")
+        }
+
+        // Save validation state
+        prefs.edit()
+            .putLong("grow_discarded_steps_$today", discardedStepsToday)
+            .putLong("grow_validated_offset_$today", lastValidatedRaw)
+            .apply()
+
+        // Write validated step count to SQLite
+        val todayBaseline = prefs.getLong(KEY_BASELINE_PREFIX + today, -1L)
+        if (todayBaseline >= 0L && lastRawStepCount >= todayBaseline) {
+            val totalRawDelta = lastRawStepCount - todayBaseline
+            val validatedSteps = maxOf(0L, totalRawDelta - discardedStepsToday)
+            StepDbHelper.writeStepRecord(this, uid, today, validatedSteps)
         }
     }
 
@@ -349,11 +582,22 @@ class MainActivity : FlutterActivity(), SensorEventListener2 {
         val savedRaw = prefs.getLong(KEY_RAW_STEPS, 0L)
         val currentRaw = if (lastRawStepCount > 0L) lastRawStepCount else savedRaw
 
+        // BUG 8 FIX: Ensure date rollover is checked here too.
+        // If the user opens the app right after midnight without walking any steps yet,
+        // onSensorChanged may not have fired, but we still need to finalize yesterday's record.
+        if (currentRaw > 0L) {
+            StepDbHelper.handleDateRollover(this, currentRaw, today)
+        }
+
         if (pendingStepResults.isNotEmpty()) {
             val callbacks = ArrayList(pendingStepResults)
             pendingStepResults.clear()
             for (cb in callbacks) {
-                cb.success(mapOf("rawSteps" to currentRaw, "stepDate" to today))
+                cb.success(mapOf(
+                    "rawSteps" to currentRaw,
+                    "stepDate" to today,
+                    "discardedSteps" to discardedStepsToday
+                ))
             }
         }
     }
@@ -366,6 +610,9 @@ class MainActivity : FlutterActivity(), SensorEventListener2 {
                 sensorManager?.flush(this)
             } catch (_: Exception) {}
         }
+        stepDetectorSensor?.let {
+            sensorManager?.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL, 5_000_000)
+        }
     }
 
     override fun onPause() {
@@ -377,6 +624,7 @@ class MainActivity : FlutterActivity(), SensorEventListener2 {
 
     override fun onDestroy() {
         try {
+            validationHandler.removeCallbacks(validationRunnable)
             sensorManager?.unregisterListener(this)
         } catch (_: Exception) {}
         super.onDestroy()

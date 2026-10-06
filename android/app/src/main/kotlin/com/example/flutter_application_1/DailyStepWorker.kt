@@ -95,14 +95,22 @@ class DailyStepWorker(
             // Check and process day rollover if midnight occurred
             StepDbHelper.handleDateRollover(context, rawSteps, today)
 
-            // Calculate steps for today
+            // Calculate steps for today, accounting for validated/discarded steps
             val todayBaseline = prefs.getLong(KEY_BASELINE_PREFIX + today, rawSteps)
-            val todaySteps = if (rawSteps >= todayBaseline) (rawSteps - todayBaseline) else 0L
-            StepDbHelper.writeStepRecord(context, uid, today, todaySteps)
+            val totalRawDelta = if (rawSteps >= todayBaseline) (rawSteps - todayBaseline) else 0L
+
+            // Subtract discarded steps (those that failed gait validation)
+            val discardedSteps = prefs.getLong("grow_discarded_steps_$today", 0L)
+            val validatedSteps = maxOf(0L, totalRawDelta - discardedSteps)
+
+            val persisted = StepDbHelper.writeStepRecord(context, uid, today, validatedSteps)
+            if (!persisted) {
+                return@withContext Result.retry()
+            }
 
             Result.success()
         } catch (e: Exception) {
-            Result.success()
+            Result.retry()
         }
     }
 }

@@ -41,7 +41,9 @@ object StepDbHelper {
             val lastBaseline = prefs.getLong(KEY_BASELINE_PREFIX + lastRecordedDate, -1L)
             val effectiveBaseline = if (lastBaseline >= 0L) lastBaseline else 0L
             if (rawSteps >= effectiveBaseline) {
-                val stepsForYesterday = rawSteps - effectiveBaseline
+                val discardedYesterday = prefs.getLong("grow_discarded_steps_$lastRecordedDate", 0L)
+                val rawDeltaYesterday = rawSteps - effectiveBaseline
+                val stepsForYesterday = maxOf(0L, rawDeltaYesterday - discardedYesterday)
                 writeStepRecord(context, uid, lastRecordedDate, stepsForYesterday, forceOverwrite = true)
             }
 
@@ -73,10 +75,10 @@ object StepDbHelper {
      * Consolidates any duplicate rows so exactly ONE entry exists per (uid, date).
      */
     @Synchronized
-    fun writeStepRecord(context: Context, uid: String, dateStr: String, steps: Long, forceOverwrite: Boolean = false) {
+    fun writeStepRecord(context: Context, uid: String, dateStr: String, steps: Long, forceOverwrite: Boolean = false): Boolean {
         try {
             val dbFile = context.getDatabasePath("grow_app_v2.db")
-            if (!dbFile.exists()) return
+            if (!dbFile.exists()) return false
 
             val db = SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READWRITE)
             try {
@@ -87,7 +89,13 @@ object StepDbHelper {
                 )
 
                 var existingId: String? = null
-                var goal = 6000
+                // FIX C2: Read user's chosen goal from native prefs instead of hardcoding 6000.
+                // grow_daily_step_goal is written by MainActivity.setStepGoal which Flutter calls
+                // whenever StepProvider.updateDailyGoal() is called.
+                val stepPrefs = context.getSharedPreferences("grow_step_prefs", 0)
+                val userGoal = stepPrefs.getInt("grow_daily_step_goal", 6000)
+                var goal = userGoal // Default to user's actual goal, not hardcoded 6000
+                val rebootOffset = stepPrefs.getLong("grow_pre_reboot_offset_$dateStr", 0L)
                 var existingSteps = 0L
                 val duplicateIds = mutableListOf<String>()
 
@@ -95,11 +103,16 @@ object StepDbHelper {
                     val id = cursor.getString(0)
                     if (existingId == null) {
                         existingId = id
-                        goal = cursor.getInt(1)
+                        // If the existing row has a goal > 0, use it (may be more up-to-date);
+                        // otherwise fall back to the user's prefs goal
+                        val rowGoal = cursor.getInt(1)
+                        goal = if (rowGoal > 0) rowGoal else userGoal
                         existingSteps = cursor.getLong(2)
                     } else {
-                        // Consolidate any duplicate rows
-                        existingSteps += cursor.getLong(2)
+                        // Consolidate any duplicate rows — use MAX not SUM since each row is a
+                        // daily cumulative total, not an incremental count. Summing would double-count.
+                        val dupSteps = cursor.getLong(2)
+                        if (dupSteps > existingSteps) existingSteps = dupSteps
                         duplicateIds.add(id)
                     }
                 }
@@ -110,7 +123,12 @@ object StepDbHelper {
                     db.delete("step_records", "id = ?", arrayOf(dupId))
                 }
 
-                val effectiveSteps = if (forceOverwrite) steps else maxOf(existingSteps, steps)
+                val postRebootTotal = steps + rebootOffset
+                val effectiveSteps = if (forceOverwrite) {
+                    postRebootTotal
+                } else {
+                    maxOf(existingSteps, postRebootTotal)
+                }
 
                 val cv = ContentValues().apply {
                     put("uid", uid)
@@ -132,6 +150,8 @@ object StepDbHelper {
             } finally {
                 db.close()
             }
+            return true
         } catch (_: Exception) {}
+        return false
     }
 }

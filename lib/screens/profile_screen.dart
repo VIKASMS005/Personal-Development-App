@@ -57,7 +57,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final picker = ImagePicker();
     final source = await showModalBottomSheet<ImageSource>(
       context: context,
-      backgroundColor: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface,
+      backgroundColor: Theme.of(context).cardTheme.color ??
+          Theme.of(context).colorScheme.surface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
@@ -78,7 +79,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
               const SizedBox(height: 16),
               Text(
                 'Change Profile Photo',
-                style: Theme.of(ctx).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+                style: Theme.of(ctx)
+                    .textTheme
+                    .titleMedium
+                    ?.copyWith(fontWeight: FontWeight.w800),
               ),
               const SizedBox(height: 16),
               ListTile(
@@ -88,9 +92,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     color: AppColors.primary.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(10),
                   ),
-                  child: const Icon(Icons.camera_alt_rounded, color: AppColors.primary),
+                  child: const Icon(Icons.camera_alt_rounded,
+                      color: AppColors.primary),
                 ),
-                title: const Text('Take Photo with Camera', style: TextStyle(fontWeight: FontWeight.w600)),
+                title: const Text('Take Photo with Camera',
+                    style: TextStyle(fontWeight: FontWeight.w600)),
                 trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 14),
                 onTap: () => Navigator.pop(ctx, ImageSource.camera),
               ),
@@ -102,9 +108,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     color: AppColors.secondary.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(10),
                   ),
-                  child: const Icon(Icons.photo_library_rounded, color: AppColors.secondary),
+                  child: const Icon(Icons.photo_library_rounded,
+                      color: AppColors.secondary),
                 ),
-                title: const Text('Choose from Gallery', style: TextStyle(fontWeight: FontWeight.w600)),
+                title: const Text('Choose from Gallery',
+                    style: TextStyle(fontWeight: FontWeight.w600)),
                 trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 14),
                 onTap: () => Navigator.pop(ctx, ImageSource.gallery),
               ),
@@ -193,11 +201,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
             padding: const EdgeInsets.only(right: 12),
             child: FilledButton.tonalIcon(
               style: FilledButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
               ),
-              icon: Icon(_isEditing ? Icons.check_rounded : Icons.edit_rounded, size: 16),
-              label: Text(_isEditing ? 'Save' : 'Edit', style: const TextStyle(fontWeight: FontWeight.w700)),
+              icon: Icon(_isEditing ? Icons.check_rounded : Icons.edit_rounded,
+                  size: 16),
+              label: Text(_isEditing ? 'Save' : 'Edit',
+                  style: const TextStyle(fontWeight: FontWeight.w700)),
               onPressed: () {
                 if (_isEditing) {
                   _saveProfile();
@@ -242,8 +254,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           icon: Icons.badge_outlined,
                           iconColor: AppColors.primary,
                           enabled: _isEditing,
-                          validator: (v) =>
-                              v == null || v.trim().isEmpty ? 'Please enter a name' : null,
+                          validator: (v) => v == null || v.trim().isEmpty
+                              ? 'Please enter a name'
+                              : null,
                         ),
                         const SizedBox(height: 14),
 
@@ -251,7 +264,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         _buildInputField(
                           controller: _bioCtrl,
                           label: 'Focus Goals & Bio',
-                          hint: 'e.g. Daily discipline, physical fitness, continuous learning',
+                          hint:
+                              'e.g. Daily discipline, physical fitness, continuous learning',
                           icon: Icons.psychology_outlined,
                           iconColor: AppColors.accent,
                           maxLines: 2,
@@ -279,11 +293,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: AppColors.primary,
                                 foregroundColor: Colors.white,
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(14)),
                               ),
                               icon: const Icon(Icons.check_rounded, size: 20),
                               label: const Text('Save Profile Changes',
-                                  style: TextStyle(fontWeight: FontWeight.w800)),
+                                  style:
+                                      TextStyle(fontWeight: FontWeight.w800)),
                               onPressed: _saveProfile,
                             ),
                           ),
@@ -306,14 +322,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           contentPadding: EdgeInsets.zero,
                           title: Text(
                             isDark ? 'Theme: Dark Mode' : 'Theme: Light Mode',
-                            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
+                            style: const TextStyle(
+                                fontWeight: FontWeight.w700, fontSize: 15),
                           ),
                           subtitle: Text(
                             isDark
                                 ? 'Switch to clean Light theme'
                                 : 'Switch to eye-friendly Dark theme',
                             style: theme.textTheme.bodySmall?.copyWith(
-                              color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                              color: theme.colorScheme.onSurface
+                                  .withValues(alpha: 0.6),
                             ),
                           ),
                           secondary: Container(
@@ -325,13 +343,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               borderRadius: BorderRadius.circular(10),
                             ),
                             child: Icon(
-                              isDark ? Icons.dark_mode_rounded : Icons.light_mode_rounded,
-                              color: isDark ? AppColors.secondary : AppColors.accent,
+                              isDark
+                                  ? Icons.dark_mode_rounded
+                                  : Icons.light_mode_rounded,
+                              color: isDark
+                                  ? AppColors.secondary
+                                  : AppColors.accent,
                               size: 20,
                             ),
                           ),
                           value: isDark,
-                          activeTrackColor: AppColors.primary.withValues(alpha: 0.5),
+                          activeTrackColor:
+                              AppColors.primary.withValues(alpha: 0.5),
                           onChanged: (_) => themeProvider.toggleTheme(context),
                         ),
                       ],
@@ -355,13 +378,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               backgroundColor: AppColors.timetable,
                               foregroundColor: Colors.white,
                               padding: const EdgeInsets.symmetric(vertical: 13),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14)),
                             ),
                             icon: const Icon(Icons.upload_rounded, size: 20),
-                            label: const Text('Export My Data', style: TextStyle(fontWeight: FontWeight.w800)),
+                            label: const Text('Export My Data',
+                                style: TextStyle(fontWeight: FontWeight.w800)),
                             onPressed: () async {
                               final uid = auth.uid ?? 'local_user';
-                              final path = await DataExportService.instance.exportToDownloads(uid);
+                              final path = await DataExportService.instance
+                                  .exportToDownloads(uid);
                               if (!context.mounted) return;
                               if (path != null) {
                                 ScaffoldMessenger.of(context).clearSnackBars();
@@ -377,7 +403,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                 ScaffoldMessenger.of(context).clearSnackBars();
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   const SnackBar(
-                                    content: Text('❌ Export failed. Please try again.'),
+                                    content: Text(
+                                        '❌ Export failed. Please try again.'),
                                     backgroundColor: AppColors.error,
                                     duration: Duration(seconds: 2),
                                     behavior: SnackBarBehavior.floating,
@@ -394,52 +421,70 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           child: OutlinedButton.icon(
                             style: OutlinedButton.styleFrom(
                               foregroundColor: AppColors.timetable,
-                              side: const BorderSide(color: AppColors.timetable, width: 1.5),
+                              side: const BorderSide(
+                                  color: AppColors.timetable, width: 1.5),
                               padding: const EdgeInsets.symmetric(vertical: 13),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14)),
                             ),
                             icon: const Icon(Icons.download_rounded, size: 20),
-                            label: const Text('Import & Restore Data', style: TextStyle(fontWeight: FontWeight.w800)),
+                            label: const Text('Import & Restore Data',
+                                style: TextStyle(fontWeight: FontWeight.w800)),
                             onPressed: () async {
                               final confirm = await showDialog<bool>(
                                 context: context,
                                 builder: (_) => AlertDialog(
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(20)),
                                   title: const Text('Restore from Backup?'),
                                   content: const Text(
                                     'This will merge the backup data with your current data. Existing records with the same ID will be overwritten.\n\nPick your grow_backup_*.json file to continue.',
                                   ),
                                   actions: [
                                     TextButton(
-                                      onPressed: () => Navigator.pop(context, false),
+                                      onPressed: () =>
+                                          Navigator.pop(context, false),
                                       child: const Text('Cancel'),
                                     ),
                                     TextButton(
-                                      onPressed: () => Navigator.pop(context, true),
+                                      onPressed: () =>
+                                          Navigator.pop(context, true),
                                       child: const Text(
                                         'Pick File & Restore',
-                                        style: TextStyle(color: AppColors.timetable, fontWeight: FontWeight.w800),
+                                        style: TextStyle(
+                                            color: AppColors.timetable,
+                                            fontWeight: FontWeight.w800),
                                       ),
                                     ),
                                   ],
                                 ),
                               );
                               if (confirm != true || !context.mounted) return;
-                              final success = await DataExportService.instance.importFromFile();
+                              final success = await DataExportService.instance
+                                  .importFromFile(
+                                uid: auth.uid ?? 'local_user',
+                              );
                               if (!context.mounted) return;
                               if (success) {
                                 // Reload all providers
                                 final uid = auth.uid ?? 'local_user';
                                 context.read<TodoProvider>().loadTodos(uid);
                                 context.read<HabitProvider>().loadHabits(uid);
-                                context.read<JournalProvider>().loadJournals(uid);
-                                context.read<FinanceProvider>().loadTransactions(uid);
-                                context.read<ReminderProvider>().loadReminders(uid);
+                                context
+                                    .read<JournalProvider>()
+                                    .loadJournals(uid);
+                                context
+                                    .read<FinanceProvider>()
+                                    .loadTransactions(uid);
+                                context
+                                    .read<ReminderProvider>()
+                                    .loadReminders(uid);
                                 context.read<AlarmProvider>().loadAlarms(uid);
                                 ScaffoldMessenger.of(context).clearSnackBars();
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   const SnackBar(
-                                    content: Text('✅ Data restored successfully!'),
+                                    content:
+                                        Text('✅ Data restored successfully!'),
                                     backgroundColor: AppColors.success,
                                     duration: Duration(seconds: 2),
                                     behavior: SnackBarBehavior.floating,
@@ -449,7 +494,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                 ScaffoldMessenger.of(context).clearSnackBars();
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   const SnackBar(
-                                    content: Text('❌ Import failed or cancelled.'),
+                                    content:
+                                        Text('❌ Import failed or cancelled.'),
                                     backgroundColor: AppColors.error,
                                     duration: Duration(seconds: 2),
                                     behavior: SnackBarBehavior.floating,
@@ -463,7 +509,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         Text(
                           'Export saves a .json file to your Downloads folder. You can import it any time to restore all data.',
                           style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.onSurface.withValues(alpha: 0.55),
+                            color: theme.colorScheme.onSurface
+                                .withValues(alpha: 0.55),
                           ),
                           textAlign: TextAlign.center,
                         ),
@@ -477,18 +524,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     child: TextButton.icon(
                       style: TextButton.styleFrom(
                         foregroundColor: AppColors.error,
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 8),
                       ),
                       icon: const Icon(Icons.delete_forever_rounded, size: 18),
                       label: const Text(
                         'Reset All Local Data',
-                        style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                        style: TextStyle(
+                            fontWeight: FontWeight.w600, fontSize: 13),
                       ),
                       onPressed: () async {
                         final ok = await showDialog<bool>(
                           context: context,
                           builder: (_) => AlertDialog(
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(20)),
                             title: const Text('Reset All Local Data?'),
                             content: const Text(
                               '⚠️ This will permanently clear all your local tasks, habits, focus logs, journals, finances, alarms, and routines from this device.',
@@ -502,7 +552,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                 onPressed: () => Navigator.pop(context, true),
                                 child: const Text(
                                   'Clear Everything',
-                                  style: TextStyle(color: AppColors.error, fontWeight: FontWeight.w800),
+                                  style: TextStyle(
+                                      color: AppColors.error,
+                                      fontWeight: FontWeight.w800),
                                 ),
                               ),
                             ],
@@ -528,7 +580,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             context.read<TodoProvider>().loadTodos(uid);
                             context.read<HabitProvider>().loadHabits(uid);
                             context.read<JournalProvider>().loadJournals(uid);
-                            context.read<FinanceProvider>().loadTransactions(uid);
+                            context
+                                .read<FinanceProvider>()
+                                .loadTransactions(uid);
                             context.read<CalendarProvider>().loadEvents(uid);
                             context.read<TimetableProvider>().loadSlots(uid);
                             context.read<ChatbotProvider>().loadMessages(uid);
@@ -539,7 +593,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             ScaffoldMessenger.of(context).clearSnackBars();
                             ScaffoldMessenger.of(context).showSnackBar(
                               const SnackBar(
-                                content: Text('🗑️ All local data has been reset.'),
+                                content:
+                                    Text('🗑️ All local data has been reset.'),
                                 backgroundColor: AppColors.primary,
                                 duration: Duration(seconds: 2),
                                 behavior: SnackBarBehavior.floating,
@@ -564,12 +619,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Widget _buildHeroHeader(UserProfile? profile, ThemeData theme, bool isDark) {
     final photoPath = profile?.photoPath;
-    final hasValidFile =
-        photoPath != null && photoPath.isNotEmpty && File(photoPath).existsSync();
-    final initial = (profile?.name.isNotEmpty == true
-            ? profile!.name.substring(0, 1)
-            : 'G')
-        .toUpperCase();
+    final hasValidFile = photoPath != null &&
+        photoPath.isNotEmpty &&
+        File(photoPath).existsSync();
+    final initial =
+        (profile?.name.isNotEmpty == true ? profile!.name.substring(0, 1) : 'G')
+            .toUpperCase();
 
     return Container(
       width: double.infinity,
@@ -607,7 +662,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   key: ValueKey(photoPath),
                   radius: 38,
                   backgroundColor: theme.colorScheme.surface,
-                  backgroundImage: hasValidFile ? FileImage(File(photoPath)) : null,
+                  backgroundImage:
+                      hasValidFile ? FileImage(File(photoPath)) : null,
                   child: !hasValidFile
                       ? Text(
                           initial,
@@ -629,7 +685,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     decoration: BoxDecoration(
                       color: AppColors.primary,
                       shape: BoxShape.circle,
-                      border: Border.all(color: theme.colorScheme.surface, width: 2),
+                      border: Border.all(
+                          color: theme.colorScheme.surface, width: 2),
                     ),
                     child: const Icon(
                       Icons.camera_alt_rounded,
@@ -647,7 +704,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  profile?.name.isNotEmpty == true ? profile!.name : 'Grow Member',
+                  profile?.name.isNotEmpty == true
+                      ? profile!.name
+                      : 'Grow Member',
                   style: theme.textTheme.titleLarge?.copyWith(
                     fontWeight: FontWeight.w900,
                     letterSpacing: -0.3,
@@ -667,7 +726,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 ),
                 const SizedBox(height: 8),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                   decoration: BoxDecoration(
                     color: AppColors.primary.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(20),
@@ -675,7 +735,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   child: const Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(Icons.shield_rounded, size: 14, color: AppColors.primary),
+                      Icon(Icons.shield_rounded,
+                          size: 14, color: AppColors.primary),
                       SizedBox(width: 5),
                       Text(
                         'Local Storage Active',
@@ -778,7 +839,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
           child: Icon(icon, color: enabled ? iconColor : Colors.grey, size: 20),
         ),
         filled: true,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(14),
           borderSide: BorderSide.none,

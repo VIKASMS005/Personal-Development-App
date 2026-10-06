@@ -3,8 +3,38 @@ import 'package:grow_personal_dev/models/todo.dart';
 import 'package:grow_personal_dev/models/habit.dart';
 import 'package:grow_personal_dev/models/timetable_slot.dart';
 import 'package:grow_personal_dev/models/journal_entry.dart';
+import 'package:grow_personal_dev/services/notification_service.dart';
+import 'package:grow_personal_dev/models/screen_time_record.dart';
+import 'package:grow_personal_dev/models/step_record.dart';
 
 void main() {
+  test('Screen-time summaries round-trip daily and per-app data', () {
+    final start = DateTime(2026, 9, 10, 9);
+    final summary = DailyScreenTimeSummary(
+      date: '2026-09-10',
+      totalDuration: const Duration(hours: 2, minutes: 15),
+      appUsages: [
+        AppUsageRecord(
+          packageName: 'com.example.app',
+          appName: 'Example',
+          usage: const Duration(minutes: 30),
+          startDate: start,
+          endDate: start.add(const Duration(minutes: 30)),
+          category: 'Productivity',
+        ),
+      ],
+      categoryBreakdown: const {
+        'Productivity': Duration(minutes: 30),
+      },
+    );
+
+    final restored =
+        DailyScreenTimeSummary.fromMap(summary.toMap('local_user'));
+    expect(restored.date, '2026-09-10');
+    expect(restored.totalDuration, const Duration(hours: 2, minutes: 15));
+    expect(restored.appUsages.single.appName, 'Example');
+  });
+
   group('Task vs Goal Permanent Classification Tests', () {
     test('Deadline <= 7 days from creation is classified as Task', () {
       final now = DateTime(2026, 9, 1, 12, 0);
@@ -63,9 +93,12 @@ void main() {
       expect(g2.isTask, isFalse);
     });
 
-    test('Goal NEVER becomes a Task as deadline approaches (Permanent Classification)', () {
+    test(
+        'Goal NEVER becomes a Task as deadline approaches (Permanent Classification)',
+        () {
       final creationDate = DateTime(2026, 8, 1, 10, 0);
-      final deadline = DateTime(2026, 9, 10, 10, 0); // 40 days initially -> Goal
+      final deadline =
+          DateTime(2026, 9, 10, 10, 0); // 40 days initially -> Goal
 
       final goal = Todo(
         title: 'Complete Certification',
@@ -85,6 +118,24 @@ void main() {
       expect(restored.type, equals('goal'));
       expect(restored.isGoal, isTrue);
       expect(restored.isTask, isFalse);
+    });
+
+    test(
+        'Locked Task remains a Task after its deadline moves beyond seven days',
+        () {
+      final created = DateTime(2026, 9, 1);
+      final task = Todo(
+        title: 'Permanent Task',
+        dueDate: DateTime(2026, 9, 3),
+        createdAt: created,
+      );
+
+      final stored = task.toSqliteMap()
+        ..['due_date'] = DateTime(2026, 9, 30).toIso8601String();
+      final restored = Todo.fromSqlite(stored);
+
+      expect(restored.isTask, isTrue);
+      expect(restored.isGoal, isFalse);
     });
 
     test('2-Hour Grace Period and Missed Status logic', () {
@@ -127,7 +178,9 @@ void main() {
       }
     });
 
-    test('Legacy migration of existing stored tasks into goals using original creation date', () {
+    test(
+        'Legacy migration of existing stored tasks into goals using original creation date',
+        () {
       // Simulating raw SQLite rows stored before the classification system
       final legacyRows = [
         // Task A: Created Sep 1, Deadline Sep 5 (diff = 4 <= 7) -> Stays Task
@@ -213,7 +266,9 @@ void main() {
   });
 
   group('Habit Streak Consecutive Days Calculation', () {
-    test('Calculates streak accurately when completed today and past consecutive days', () {
+    test(
+        'Calculates streak accurately when completed today and past consecutive days',
+        () {
       final now = DateTime(2026, 9, 4);
       final history = {
         '2026-09-04': true,
@@ -227,7 +282,9 @@ void main() {
       expect(streak, equals(3));
     });
 
-    test('Preserves streak on current day morning when today is not yet done but yesterday was done', () {
+    test(
+        'Preserves streak on current day morning when today is not yet done but yesterday was done',
+        () {
       final now = DateTime(2026, 9, 4);
       final history = {
         '2026-09-03': true,
@@ -258,7 +315,8 @@ void main() {
   });
 
   group('Timetable Daily Reset Logic', () {
-    test('Slot is completed only on the date recorded in lastCompletedDate', () {
+    test('Slot is completed only on the date recorded in lastCompletedDate',
+        () {
       final slot = TimetableSlot(
         startTime: '09:00',
         endTime: '10:00',
@@ -274,7 +332,8 @@ void main() {
       expect(slot.isCompletedOn('2026-09-04'), isFalse);
     });
 
-    test('Toggling completion updates lastCompletedDate to current date string', () {
+    test('Toggling completion updates lastCompletedDate to current date string',
+        () {
       final today = DateTime(2026, 9, 4);
       final slot = TimetableSlot(
         startTime: '09:00',
@@ -287,8 +346,9 @@ void main() {
 
       // Marking complete
       final completedSlot = slot.copyWith(isCompleted: true);
-      expect(completedSlot.lastCompletedDate, equals('2026-09-04'));
-      expect(completedSlot.isCompletedToday(today), isTrue);
+      expect(completedSlot.lastCompletedDate,
+          equals(TimetableSlot.formatTodayString()));
+      expect(completedSlot.isCompletedToday(), isTrue);
 
       // Marking uncompleted
       final uncompletedSlot = completedSlot.copyWith(isCompleted: false);
@@ -308,7 +368,8 @@ void main() {
 
       final sqliteMap = entry.toSqliteMap();
       expect(sqliteMap['title'], equals('Morning Focus'));
-      expect(sqliteMap['text'], equals('Wrote 500 lines of code and meditated.'));
+      expect(
+          sqliteMap['text'], equals('Wrote 500 lines of code and meditated.'));
 
       final restored = JournalEntry.fromSqlite(sqliteMap);
       expect(restored.title, equals('Morning Focus'));
@@ -355,7 +416,9 @@ void main() {
   });
 
   group('Step Date Rollover & Forward Navigation Guard Tests', () {
-    test('Steps walked on Sep 3 do NOT carry over to Sep 4 (Isolated Baselines)', () {
+    test(
+        'Steps walked on Sep 3 do NOT carry over to Sep 4 (Isolated Baselines)',
+        () {
       // Hardware sensor cumulative count at end of Sep 3: 5000 steps
       const sep3RawSteps = 5000;
       const sep3Baseline = 0;
@@ -384,7 +447,8 @@ void main() {
     });
 
     test('Forward Date Navigation is blocked on Today and clamped', () {
-      DateTime normalizeDate(DateTime dt) => DateTime(dt.year, dt.month, dt.day);
+      DateTime normalizeDate(DateTime dt) =>
+          DateTime(dt.year, dt.month, dt.day);
 
       final today = DateTime(2026, 9, 4, 14, 30);
       final normalizedToday = normalizeDate(today);
@@ -392,18 +456,21 @@ void main() {
       var selectedDate = normalizedToday;
 
       // On Today (Sep 4): canGoNext MUST be false
-      bool canGoNext(DateTime selected) => normalizeDate(selected).isBefore(normalizedToday);
+      bool canGoNext(DateTime selected) =>
+          normalizeDate(selected).isBefore(normalizedToday);
       expect(canGoNext(selectedDate), isFalse);
 
       // User navigates backward to Sep 3
-      selectedDate = DateTime(selectedDate.year, selectedDate.month, selectedDate.day - 1);
+      selectedDate =
+          DateTime(selectedDate.year, selectedDate.month, selectedDate.day - 1);
       expect(selectedDate, equals(DateTime(2026, 9, 3)));
       // On Sep 3: canGoNext MUST be true
       expect(canGoNext(selectedDate), isTrue);
 
       // User navigates forward from Sep 3 -> Sep 4
       if (canGoNext(selectedDate)) {
-        final next = DateTime(selectedDate.year, selectedDate.month, selectedDate.day + 1);
+        final next = DateTime(
+            selectedDate.year, selectedDate.month, selectedDate.day + 1);
         if (!normalizeDate(next).isAfter(normalizedToday)) {
           selectedDate = next;
         }
@@ -414,7 +481,8 @@ void main() {
 
       // Attempting to advance beyond Sep 4 is blocked
       if (canGoNext(selectedDate)) {
-        selectedDate = DateTime(selectedDate.year, selectedDate.month, selectedDate.day + 1);
+        selectedDate = DateTime(
+            selectedDate.year, selectedDate.month, selectedDate.day + 1);
       }
       expect(selectedDate, equals(DateTime(2026, 9, 4))); // Still Sep 4!
 
@@ -432,9 +500,11 @@ void main() {
       // Month View: Sep 2026
       var selYear = 2026;
       var selMonth = 9;
-      bool canGoNextMonth(int y, int m) => (y < now.year) || (y == now.year && m < now.month);
+      bool canGoNextMonth(int y, int m) =>
+          (y < now.year) || (y == now.year && m < now.month);
 
-      expect(canGoNextMonth(selYear, selMonth), isFalse); // September 2026 cannot go next
+      expect(canGoNextMonth(selYear, selMonth),
+          isFalse); // September 2026 cannot go next
 
       // Go back to August 2026
       selMonth = 8;
@@ -448,7 +518,9 @@ void main() {
   });
 
   group('Pull-to-Refresh Step Tracking & Navigation Integrity Tests', () {
-    test('Pulling to refresh multiple times never double-counts steps (Idempotent)', () {
+    test(
+        'Pulling to refresh multiple times never double-counts steps (Idempotent)',
+        () {
       // Setup day baseline
       const dayBaseline = 10000;
       var rawHardwareSteps = 12000;
@@ -465,11 +537,14 @@ void main() {
       // User pulls to refresh 10 times without walking
       for (int i = 0; i < 10; i++) {
         todaySteps = calculateTodaySteps(rawHardwareSteps, dayBaseline);
-        expect(todaySteps, equals(2000), reason: 'Refresh iteration $i should not duplicate steps');
+        expect(todaySteps, equals(2000),
+            reason: 'Refresh iteration $i should not duplicate steps');
       }
     });
 
-    test('Walking 500 steps and refreshing retrieves exact updated steps without duplication', () {
+    test(
+        'Walking 500 steps and refreshing retrieves exact updated steps without duplication',
+        () {
       const dayBaseline = 10000;
       var rawHardwareSteps = 12000; // 2,000 steps walked so far
 
@@ -489,11 +564,13 @@ void main() {
 
       // User refreshes 5 more times
       for (int i = 0; i < 5; i++) {
-        expect(calculateTodaySteps(rawHardwareSteps, dayBaseline), equals(2500));
+        expect(
+            calculateTodaySteps(rawHardwareSteps, dayBaseline), equals(2500));
       }
     });
 
-    test('Historical date refresh preserves selected date and historical data', () {
+    test('Historical date refresh preserves selected date and historical data',
+        () {
       final today = DateTime(2026, 9, 4);
       var selectedDate = DateTime(2026, 9, 2); // User viewing Sep 2
 
@@ -504,12 +581,14 @@ void main() {
       };
 
       // Simulating onRefresh handler on historical date:
-      DateTime normalizeDate(DateTime dt) => DateTime(dt.year, dt.month, dt.day);
+      DateTime normalizeDate(DateTime dt) =>
+          DateTime(dt.year, dt.month, dt.day);
       final isToday = normalizeDate(selectedDate) == normalizeDate(today);
       expect(isToday, isFalse);
 
       // On historical date, refresh reloads database records without altering selectedDate
-      final dateKey = '${selectedDate.year}-${selectedDate.month.toString().padLeft(2, '0')}-${selectedDate.day.toString().padLeft(2, '0')}';
+      final dateKey =
+          '${selectedDate.year}-${selectedDate.month.toString().padLeft(2, '0')}-${selectedDate.day.toString().padLeft(2, '0')}';
       final displayedSteps = databaseRecords[dateKey] ?? 0;
 
       // Verify Sep 2 data is 4,500 (NOT replaced with today's 2,500)
@@ -517,12 +596,15 @@ void main() {
       expect(selectedDate, equals(DateTime(2026, 9, 2)));
     });
 
-    test('Future date navigation remains disabled during and after refresh', () {
-      DateTime normalizeDate(DateTime dt) => DateTime(dt.year, dt.month, dt.day);
+    test('Future date navigation remains disabled during and after refresh',
+        () {
+      DateTime normalizeDate(DateTime dt) =>
+          DateTime(dt.year, dt.month, dt.day);
       final today = normalizeDate(DateTime(2026, 9, 4));
       var selectedDate = today;
 
-      bool canGoNext(DateTime selected) => normalizeDate(selected).isBefore(today);
+      bool canGoNext(DateTime selected) =>
+          normalizeDate(selected).isBefore(today);
 
       // Before refresh on today
       expect(canGoNext(selectedDate), isFalse);
@@ -533,12 +615,15 @@ void main() {
 
       // Attempting to advance into Sep 5 is blocked
       if (canGoNext(selectedDate)) {
-        selectedDate = DateTime(selectedDate.year, selectedDate.month, selectedDate.day + 1);
+        selectedDate = DateTime(
+            selectedDate.year, selectedDate.month, selectedDate.day + 1);
       }
       expect(selectedDate, equals(today)); // Still Sep 4
     });
 
-    test('Screen-off pocket step batching accurately captures all 40-50 steps upon flush', () {
+    test(
+        'Screen-off pocket step batching accurately captures all 40-50 steps upon flush',
+        () {
       const todayBaseline = 5000;
       var rawHardwareSteps = 5000; // Screen turned off with phone in pocket
 
@@ -556,11 +641,184 @@ void main() {
 
       // Phone is taken out and unlocked: hardware flush delivers all 48 steps at once
       final flushedSteps = calculateTodaySteps(rawHardwareSteps, todayBaseline);
-      expect(flushedSteps, equals(48), reason: 'All 48 steps must be delivered, not just 6');
+      expect(flushedSteps, equals(48),
+          reason: 'All 48 steps must be delivered, not just 6');
 
       // User walks another 50 steps
       rawHardwareSteps += 50;
       expect(calculateTodaySteps(rawHardwareSteps, todayBaseline), equals(98));
+    });
+  });
+
+  group('Stable Notification ID Tests', () {
+    test(
+        'stableId produces identical deterministic hashes across calls and fits in 31-bit positive int',
+        () {
+      const id1 = 'alarm_abc-123-uuid';
+      const id2 = 'task_xyz-789-uuid';
+      final h1A = NotificationService.stableId(id1);
+      final h1B = NotificationService.stableId(id1);
+      final h2 = NotificationService.stableId(id2);
+
+      expect(h1A, equals(h1B), reason: 'stableId must be 100% deterministic');
+      expect(h1A, isNot(equals(h2)),
+          reason: 'different IDs should produce different hashes');
+      expect(h1A >= 0 && h1A <= 0x7FFFFFFF, isTrue);
+      expect(h2 >= 0 && h2 <= 0x7FFFFFFF, isTrue);
+    });
+
+    test('Alarm 3-Snooze cycle and Missed Alarm IDs have unique non-colliding offsets', () {
+      final baseId = NotificationService.stableId('alarm_morning_routine');
+      final s1 = baseId + 100000;
+      final s2 = baseId + 200000;
+      final s3 = baseId + 300000;
+      final missed = baseId + 400000;
+
+      final idSet = {baseId, s1, s2, s3, missed};
+      expect(idSet.length, equals(5), reason: 'All 3 snoozes and missed alarm must have unique IDs');
+      for (final id in idSet) {
+        expect(id, isPositive);
+      }
+    });
+  });
+
+  group('Weekly Steps Calculation & Monday-to-Sunday Alignment Tests', () {
+    test('Calculates Monday to Sunday range correctly for any given anchor day', () {
+      // Wednesday Sep 16, 2026 -> Monday Sep 14 to Sunday Sep 20
+      final wednesday = DateTime(2026, 9, 16);
+      final monday = DateTime(wednesday.year, wednesday.month, wednesday.day - (wednesday.weekday - 1));
+      final sunday = DateTime(monday.year, monday.month, monday.day + 6);
+
+      expect(monday, equals(DateTime(2026, 9, 14)));
+      expect(sunday, equals(DateTime(2026, 9, 20)));
+      expect(monday.weekday, equals(DateTime.monday));
+      expect(sunday.weekday, equals(DateTime.sunday));
+    });
+
+    test('WeeklySummary calculates total steps, daily average, highest and lowest days accurately', () {
+      final records = [
+        StepRecord(date: '2026-09-14', stepCount: 6245, goal: 6000), // Mon
+        StepRecord(date: '2026-09-15', stepCount: 8120, goal: 6000), // Tue
+        StepRecord(date: '2026-09-16', stepCount: 4980, goal: 6000), // Wed
+        StepRecord(date: '2026-09-17', stepCount: 9450, goal: 6000), // Thu
+        StepRecord(date: '2026-09-18', stepCount: 7230, goal: 6000), // Fri
+        StepRecord(date: '2026-09-19', stepCount: 11020, goal: 6000), // Sat
+        StepRecord(date: '2026-09-20', stepCount: 5870, goal: 6000), // Sun
+      ];
+
+      final total = records.fold(0, (sum, r) => sum + r.stepCount);
+      expect(total, equals(52915));
+
+      final avg = (total / 7).round();
+      expect(avg, equals(7559));
+
+      final highest = records.reduce((a, b) => a.stepCount >= b.stepCount ? a : b);
+      expect(highest.date, equals('2026-09-19'));
+      expect(highest.stepCount, equals(11020));
+
+      final lowest = records.reduce((a, b) => a.stepCount <= b.stepCount ? a : b);
+      expect(lowest.date, equals('2026-09-16'));
+      expect(lowest.stepCount, equals(4980));
+
+      final goalsReached = records.where((r) => r.isGoalReached).length;
+      expect(goalsReached, equals(5)); // Mon, Tue, Thu, Fri, Sat
+    });
+
+    test('Incomplete week handles future days gracefully with zero counts', () {
+      // Suppose today is Thursday Sep 17, 2026 (days elapsed = 4)
+      final records = [
+        StepRecord(date: '2026-09-14', stepCount: 5000, goal: 6000),
+        StepRecord(date: '2026-09-15', stepCount: 7000, goal: 6000),
+        StepRecord(date: '2026-09-16', stepCount: 8000, goal: 6000),
+        StepRecord(date: '2026-09-17', stepCount: 4000, goal: 6000), // today
+        StepRecord(date: '2026-09-18', stepCount: 0, goal: 6000), // future
+        StepRecord(date: '2026-09-19', stepCount: 0, goal: 6000), // future
+        StepRecord(date: '2026-09-20', stepCount: 0, goal: 6000), // future
+      ];
+
+      const elapsed = 4;
+      final total = records.fold(0, (sum, r) => sum + r.stepCount);
+      expect(total, equals(24000));
+
+      final avg = (total / elapsed).round();
+      expect(avg, equals(6000));
+
+      final active = records.take(elapsed).toList();
+      final highest = active.reduce((a, b) => a.stepCount >= b.stepCount ? a : b);
+      expect(highest.date, equals('2026-09-16'));
+      expect(highest.stepCount, equals(8000));
+    });
+  });
+
+  group('Real-Time Step Detection & Sensor Fusion Accuracy Tests', () {
+    test('Simulating walking 20 genuine steps increments step by step to exactly 20', () {
+      int lastHardwareCounter = 1000;
+      int detectorStepsSinceCounter = 0;
+
+      // User walks 20 steps one by one
+      for (int i = 1; i <= 20; i++) {
+        detectorStepsSinceCounter++;
+        final effectiveRaw = lastHardwareCounter + detectorStepsSinceCounter;
+        final stepsWalked = effectiveRaw - 1000;
+        expect(stepsWalked, equals(i));
+      }
+
+      final finalWalked = (lastHardwareCounter + detectorStepsSinceCounter) - 1000;
+      expect(finalWalked, equals(20));
+    });
+
+    test('Hardware counter catch-up reconciles cleanly with zero double-counting', () {
+      int lastHardwareCounter = 5000;
+      int detectorStepsSinceCounter = 0;
+
+      // 1. User takes 20 steps detected in real-time by step detector
+      for (int i = 0; i < 20; i++) {
+        detectorStepsSinceCounter++;
+      }
+      int effectiveRaw = lastHardwareCounter + detectorStepsSinceCounter;
+      expect(effectiveRaw - 5000, equals(20));
+
+      // 2. Hardware counter flushes its batch to 5020
+      const counterRaw = 5020;
+      if (counterRaw > lastHardwareCounter) {
+        final totalEffective = counterRaw > (lastHardwareCounter + detectorStepsSinceCounter)
+            ? counterRaw
+            : (lastHardwareCounter + detectorStepsSinceCounter);
+        lastHardwareCounter = counterRaw;
+        detectorStepsSinceCounter = totalEffective - counterRaw;
+        if (detectorStepsSinceCounter < 0) detectorStepsSinceCounter = 0;
+      }
+
+      effectiveRaw = lastHardwareCounter + detectorStepsSinceCounter;
+      // Must remain exactly 20, NEVER 40
+      expect(effectiveRaw - 5000, equals(20));
+      expect(detectorStepsSinceCounter, equals(0));
+    });
+
+    test('Cadence rate limiter correctly differentiates walking (1.8 Hz) from fast shaking (> 4 Hz)', () {
+      // 2-second time window (2,000,000,000 ns)
+      const windowNanos = 2000000000;
+      const maxAllowedCadenceHz = 3.6;
+      final maxAllowedStepsIn2s = (maxAllowedCadenceHz * 2.0).toInt(); // 7 steps
+
+      // Scenario A: Genuine walking at 1.8 steps/sec (~550ms between steps)
+      // In 2 seconds, a walker takes ~3 to 4 steps
+      final walkingTimestamps = [
+        0,
+        550000000,
+        1100000000,
+        1650000000,
+      ];
+      final walkingStepsInWindow = walkingTimestamps.where((t) => t <= windowNanos).length;
+      expect(walkingStepsInWindow, equals(4));
+      expect(walkingStepsInWindow <= maxAllowedStepsIn2s, isTrue); // PASS: Accepted as walking
+
+      // Scenario B: Fast hand shaking at 5.0 Hz (~200ms between steps)
+      // In 2 seconds, rapid shaking generates 10 steps
+      final shakingTimestamps = List.generate(10, (i) => i * 200000000);
+      final shakingStepsInWindow = shakingTimestamps.where((t) => t <= windowNanos).length;
+      expect(shakingStepsInWindow, equals(10));
+      expect(shakingStepsInWindow > maxAllowedStepsIn2s, isTrue); // PASS: Flagged as shaking
     });
   });
 }

@@ -8,13 +8,19 @@ import '../utils/app_colors.dart';
 
 class AlarmRingingDialog extends StatefulWidget {
   final AlarmModel alarm;
-  const AlarmRingingDialog({super.key, required this.alarm});
+  final int snoozeCount;
 
-  static Future<void> show(BuildContext context, AlarmModel alarm) {
+  const AlarmRingingDialog({
+    super.key,
+    required this.alarm,
+    this.snoozeCount = 0,
+  });
+
+  static Future<void> show(BuildContext context, AlarmModel alarm, {int snoozeCount = 0}) {
     return showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (_) => AlarmRingingDialog(alarm: alarm),
+      builder: (_) => AlarmRingingDialog(alarm: alarm, snoozeCount: snoozeCount),
     );
   }
 
@@ -61,24 +67,54 @@ class _AlarmRingingDialogState extends State<AlarmRingingDialog>
   void _turnOff() async {
     _autoOffTimer?.cancel();
     await NotificationService.stopRingtone();
+
+    // Cancel all scheduled notifications for this alarm (base, days, snoozes, missed)
+    final baseId = NotificationService.stableId(widget.alarm.id);
+    await NotificationService.cancelAlarm(baseId);
+    for (int day = 1; day <= 7; day++) {
+      await NotificationService.cancelAlarm(NotificationService.stableId('${widget.alarm.id}_day$day'));
+    }
+    for (int s = 1; s <= 3; s++) {
+      await NotificationService.cancelAlarm(NotificationService.stableId('snooze_${widget.alarm.id}_$s'));
+    }
+
     if (mounted) {
-      // Toggle alarm off in provider
-      context.read<AlarmProvider>().toggleAlarm(widget.alarm);
+      // Toggle alarm off in provider if it was a one-time alarm
+      if (widget.alarm.daysOfWeek.isEmpty && widget.alarm.isEnabled) {
+        context.read<AlarmProvider>().toggleAlarm(widget.alarm);
+      }
       Navigator.of(context, rootNavigator: true).pop();
     }
   }
 
   void _snooze() async {
+    if (widget.snoozeCount >= 3) return;
+
     _autoOffTimer?.cancel();
     await NotificationService.stopRingtone();
+
+    final nextCount = widget.snoozeCount + 1;
+    final snoozeTime = DateTime.now().add(const Duration(minutes: 5));
+    final snoozeId = NotificationService.stableId('snooze_${widget.alarm.id}_$nextCount');
+
+    // Schedule next snooze for 5 minutes later
+    await NotificationService.scheduleAlarm(
+      id: snoozeId,
+      title: widget.alarm.label.isNotEmpty ? widget.alarm.label : 'Alarm',
+      dateTime: snoozeTime,
+      body: 'Snooze $nextCount of 3 ringing!',
+      initialSnoozeCount: nextCount,
+    );
+
     if (mounted) {
       Navigator.of(context, rootNavigator: true).pop();
       ScaffoldMessenger.of(context).clearSnackBars();
+      final remaining = 3 - nextCount;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('⏰ Alarm snoozed for 3 minutes'),
+        SnackBar(
+          content: Text('⏰ Alarm snoozed for 5 minutes ($remaining snooze${remaining == 1 ? "" : "s"} remaining)'),
           backgroundColor: AppColors.alarm,
-          duration: Duration(seconds: 2),
+          duration: const Duration(seconds: 3),
           behavior: SnackBarBehavior.floating,
         ),
       );
@@ -87,12 +123,30 @@ class _AlarmRingingDialogState extends State<AlarmRingingDialog>
 
   void _dismissAndMarkMissed() async {
     await NotificationService.stopRingtone();
-    await NotificationService.showSimple(
-      id: widget.alarm.id.hashCode.abs() % 2147483647,
-      title: '⏰ Missed Alarm: ${widget.alarm.label}',
-      body: 'Alarm for ${widget.alarm.hour.toString().padLeft(2, '0')}:${widget.alarm.minute.toString().padLeft(2, '0')} was missed.',
+
+    // Cancel scheduled notifications for this alarm
+    final baseId = NotificationService.stableId(widget.alarm.id);
+    await NotificationService.cancelAlarm(baseId);
+    for (int day = 1; day <= 7; day++) {
+      await NotificationService.cancelAlarm(NotificationService.stableId('${widget.alarm.id}_day$day'));
+    }
+    for (int s = 1; s <= 3; s++) {
+      await NotificationService.cancelAlarm(NotificationService.stableId('snooze_${widget.alarm.id}_$s'));
+    }
+
+    final timeStr =
+        '${widget.alarm.hour.toString().padLeft(2, '0')}:${widget.alarm.minute.toString().padLeft(2, '0')}';
+
+    await NotificationService.sendMissedAlarmNotification(
+      id: baseId,
+      title: widget.alarm.label.isNotEmpty ? widget.alarm.label : 'Alarm',
+      timeStr: timeStr,
     );
+
     if (mounted) {
+      if (widget.alarm.daysOfWeek.isEmpty && widget.alarm.isEnabled) {
+        context.read<AlarmProvider>().toggleAlarm(widget.alarm);
+      }
       Navigator.of(context, rootNavigator: true).pop();
     }
   }
@@ -137,7 +191,7 @@ class _AlarmRingingDialogState extends State<AlarmRingingDialog>
                   ),
                 ),
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 20),
               Text(
                 '⏰ ALARM RINGING',
                 style: theme.textTheme.titleMedium?.copyWith(
@@ -164,7 +218,35 @@ class _AlarmRingingDialogState extends State<AlarmRingingDialog>
                   fontWeight: FontWeight.w600,
                 ),
               ),
-              const SizedBox(height: 28),
+              const SizedBox(height: 12),
+
+              // Snooze count chip
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: widget.snoozeCount >= 3
+                      ? AppColors.error.withValues(alpha: 0.12)
+                      : (widget.snoozeCount > 0
+                          ? Colors.orange.withValues(alpha: 0.12)
+                          : AppColors.primary.withValues(alpha: 0.12)),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  widget.snoozeCount >= 3
+                      ? 'No snoozes remaining (3/3 used)'
+                      : (widget.snoozeCount == 0
+                          ? '3 Snoozes Available (5 min each)'
+                          : 'Snooze ${widget.snoozeCount} of 3 used (${3 - widget.snoozeCount} left)'),
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: widget.snoozeCount >= 3
+                        ? AppColors.error
+                        : (widget.snoozeCount > 0 ? Colors.orange[800] : AppColors.primary),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 24),
 
               // Turn Off Button
               SizedBox(
@@ -195,11 +277,13 @@ class _AlarmRingingDialogState extends State<AlarmRingingDialog>
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                   ),
                   icon: const Icon(Icons.snooze_rounded, size: 18),
-                  label: const Text(
-                    'Snooze (3 min)',
-                    style: TextStyle(fontWeight: FontWeight.w700),
+                  label: Text(
+                    widget.snoozeCount >= 3
+                        ? 'No Snoozes Remaining'
+                        : 'Snooze (+5m) • ${3 - widget.snoozeCount} left',
+                    style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
-                  onPressed: _snooze,
+                  onPressed: widget.snoozeCount >= 3 ? null : _snooze,
                 ),
               ),
             ],

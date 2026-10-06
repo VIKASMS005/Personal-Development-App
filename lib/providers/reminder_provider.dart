@@ -12,17 +12,23 @@ class ReminderProvider extends ChangeNotifier {
   bool get isLoading => _isLoading;
   int get activeCount => _reminders.where((r) => !r.isCompleted).length;
 
-  /// Reminders whose scheduled time is in the future — sorted chronologically.
+  /// Reminders whose scheduled time is at or in the future (within last minute tolerance) — sorted chronologically.
+  /// FIX H4: Use a 1-minute lookback so reminders at the current clock minute are included.
+  /// The alarm watcher fires every 15 seconds; a strict isAfter(now) would miss reminders whose
+  /// exact DateTime is a few milliseconds in the past by the time the tick fires.
   List<Reminder> get upcomingReminders => _reminders
-      .where((r) => !r.isDeleted && r.dateTime.isAfter(DateTime.now()))
+      .where((r) =>
+          !r.isDeleted &&
+          !r.isCompleted &&
+          r.dateTime
+              .isAfter(DateTime.now().subtract(const Duration(minutes: 1))))
       .toList()
     ..sort((a, b) => a.dateTime.compareTo(b.dateTime));
 
   /// All non-deleted reminders — sorted chronologically.
-  List<Reminder> get allReminders => _reminders
-      .where((r) => !r.isDeleted)
-      .toList()
-    ..sort((a, b) => a.dateTime.compareTo(b.dateTime));
+  List<Reminder> get allReminders =>
+      _reminders.where((r) => !r.isDeleted).toList()
+        ..sort((a, b) => a.dateTime.compareTo(b.dateTime));
 
   void clear() {
     _reminders = [];
@@ -42,12 +48,18 @@ class ReminderProvider extends ChangeNotifier {
             id: 'task_${t.id}',
             uid: t.uid,
             title: t.title,
-            description: t.description.isNotEmpty ? t.description : 'Task Reminder',
+            description:
+                t.description.isNotEmpty ? t.description : 'Task Reminder',
             category: t.category,
             dateTime: t.reminderDateTime!,
             isCompleted: t.completed,
           );
           await _db.insertReminder(taskReminder);
+        } else {
+          // BUG 11 FIX: If task has no reminder or is deleted, delete obsolete reminder record and cancel notification
+          await _db.deleteReminder('task_${t.id}');
+          await NotificationService.cancel(
+              NotificationService.stableId('task_${t.id}'));
         }
       }
 
@@ -76,7 +88,7 @@ class ReminderProvider extends ChangeNotifier {
     await _db.insertReminder(r);
 
     await NotificationService.scheduleReminder(
-      id: r.id.hashCode.abs() % 2147483647,
+      id: NotificationService.stableId(r.id),
       title: '🔔 Reminder: ${r.title}',
       dateTime: r.dateTime,
       body: r.description.isNotEmpty
@@ -94,12 +106,13 @@ class ReminderProvider extends ChangeNotifier {
     );
     await updateReminder(updated);
     await NotificationService.scheduleReminder(
-      id: updated.id.hashCode.abs() % 2147483647,
+      id: NotificationService.stableId(updated.id),
       title: '🔔 Reminder: ${updated.title}',
       dateTime: updated.dateTime,
       body: updated.description.isNotEmpty
           ? updated.description
           : 'Rescheduled reminder notification',
+      reminderId: updated.id,
     );
   }
 
@@ -131,13 +144,18 @@ class ReminderProvider extends ChangeNotifier {
 
       if (!r.isCompleted) {
         await NotificationService.scheduleReminder(
-          id: r.id.hashCode.abs() % 2147483647,
-          title: r.id.startsWith('task_') ? '🔔 Task Reminder: ${r.title}' : '🔔 Reminder: ${r.title}',
+          id: NotificationService.stableId(r.id),
+          title: r.id.startsWith('task_')
+              ? '🔔 Task Reminder: ${r.title}'
+              : '🔔 Reminder: ${r.title}',
           dateTime: r.dateTime,
-          body: r.description.isNotEmpty ? r.description : 'Time for your scheduled reminder!',
+          body: r.description.isNotEmpty
+              ? r.description
+              : 'Time for your scheduled reminder!',
+          reminderId: r.id,
         );
       } else {
-        await NotificationService.cancel(r.id.hashCode.abs() % 2147483647);
+        await NotificationService.cancel(NotificationService.stableId(r.id));
       }
     }
   }
@@ -151,15 +169,28 @@ class ReminderProvider extends ChangeNotifier {
   }
 
   Future<void> deleteReminder(String id) async {
+    // BUG 10 FIX: Capture uid BEFORE removeWhere — if this is the only reminder,
+    // _reminders will be empty after the remove and _reminders.first would throw.
+    final targetReminder = _reminders.firstWhere(
+      (r) => r.id == id,
+      orElse: () => Reminder(
+          id: id,
+          uid: '',
+          title: '',
+          description: '',
+          dateTime: DateTime.now()),
+    );
+    final uid = targetReminder.uid;
+
     _reminders.removeWhere((r) => r.id == id);
     notifyListeners();
-    await NotificationService.cancel(id.hashCode.abs() % 2147483647);
+    await NotificationService.cancel(NotificationService.stableId(id));
     await _db.deleteReminder(id);
 
     // If task reminder, clear reminderDateTime on Todo
     if (id.startsWith('task_')) {
       final taskId = id.substring(5);
-      final tasks = await _db.getTodos(_reminders.isNotEmpty ? _reminders.first.uid : '');
+      final tasks = await _db.getTodos(uid);
       final matches = tasks.where((t) => t.id == taskId);
       if (matches.isNotEmpty) {
         final t = matches.first;

@@ -17,19 +17,22 @@ class TodoProvider extends ChangeNotifier {
   List<Todo> get tasks => _todos.where((t) => t.isTask).toList();
   List<Todo> get goals => _todos.where((t) => t.isGoal).toList();
 
-  List<Todo> get scheduledTasks => tasks.where((t) => !t.completed && !t.isMissed).toList();
+  List<Todo> get scheduledTasks =>
+      tasks.where((t) => !t.completed && !t.isMissed).toList();
   List<Todo> get completedTasks => tasks.where((t) => t.completed).toList();
   List<Todo> get missedTasks => tasks.where((t) => t.isMissed).toList();
 
-  List<Todo> get activeGoals => goals.where((t) => !t.completed && !t.isMissed).toList();
+  List<Todo> get activeGoals =>
+      goals.where((t) => !t.completed && !t.isMissed).toList();
   List<Todo> get completedGoals => goals.where((t) => t.completed).toList();
   List<Todo> get missedGoals => goals.where((t) => t.isMissed).toList();
 
-  int get completedCount => _todos.where((t) => t.completed).length;
-  int get pendingCount => _todos.where((t) => !t.completed).length;
-  List<Todo> get pendingTodos => _todos.where((t) => !t.completed).toList();
+  int get completedCount => completedTasks.length;
+  int get pendingCount => tasks.where((t) => !t.completed).length;
+  List<Todo> get pendingTodos => tasks.where((t) => !t.completed).toList();
+
   /// Missed = due time has passed AND 2-hour grace period is also over.
-  List<Todo> get missedTodos => _todos.where((t) => t.isMissed).toList();
+  List<Todo> get missedTodos => tasks.where((t) => t.isMissed).toList();
   int get missedCount => missedTodos.length;
 
   void clear() {
@@ -54,7 +57,8 @@ class TodoProvider extends ChangeNotifier {
         id: 'task_${todo.id}',
         uid: todo.uid,
         title: todo.title,
-        description: todo.description.isNotEmpty ? todo.description : 'Task Reminder',
+        description:
+            todo.description.isNotEmpty ? todo.description : 'Task Reminder',
         category: todo.category,
         dateTime: todo.reminderDateTime!,
         isCompleted: todo.completed,
@@ -62,7 +66,7 @@ class TodoProvider extends ChangeNotifier {
       await _db.insertReminder(taskReminder);
 
       await NotificationService.scheduleReminder(
-        id: ('task_${todo.id}').hashCode.abs() % 2147483647,
+        id: NotificationService.stableId('task_${todo.id}'),
         title: '🔔 Task Reminder: ${todo.title}',
         dateTime: todo.reminderDateTime!,
         body: todo.description.isNotEmpty
@@ -84,7 +88,8 @@ class TodoProvider extends ChangeNotifier {
           id: 'task_${todo.id}',
           uid: todo.uid,
           title: todo.title,
-          description: todo.description.isNotEmpty ? todo.description : 'Task Reminder',
+          description:
+              todo.description.isNotEmpty ? todo.description : 'Task Reminder',
           category: todo.category,
           dateTime: todo.reminderDateTime!,
           isCompleted: todo.completed,
@@ -92,7 +97,7 @@ class TodoProvider extends ChangeNotifier {
         await _db.insertReminder(taskReminder);
 
         await NotificationService.scheduleReminder(
-          id: ('task_${todo.id}').hashCode.abs() % 2147483647,
+          id: NotificationService.stableId('task_${todo.id}'),
           title: '🔔 Task Reminder: ${todo.title}',
           dateTime: todo.reminderDateTime!,
           body: todo.description.isNotEmpty
@@ -107,14 +112,17 @@ class TodoProvider extends ChangeNotifier {
             id: 'task_${todo.id}',
             uid: todo.uid,
             title: todo.title,
-            description: todo.description.isNotEmpty ? todo.description : 'Task Reminder',
+            description: todo.description.isNotEmpty
+                ? todo.description
+                : 'Task Reminder',
             category: todo.category,
             dateTime: todo.reminderDateTime!,
             isCompleted: true,
           );
           await _db.insertReminder(taskReminder);
         }
-        await NotificationService.cancel(('task_${todo.id}').hashCode.abs() % 2147483647);
+        await NotificationService.cancel(
+            NotificationService.stableId('task_${todo.id}'));
       }
     }
   }
@@ -139,7 +147,9 @@ class TodoProvider extends ChangeNotifier {
           id: 'task_${updated.id}',
           uid: updated.uid,
           title: updated.title,
-          description: updated.description.isNotEmpty ? updated.description : 'Task Reminder',
+          description: updated.description.isNotEmpty
+              ? updated.description
+              : 'Task Reminder',
           category: updated.category,
           dateTime: updated.reminderDateTime!,
           isCompleted: updated.completed,
@@ -148,10 +158,12 @@ class TodoProvider extends ChangeNotifier {
       }
 
       if (updated.completed) {
-        await NotificationService.cancel(('task_${todo.id}').hashCode.abs() % 2147483647);
-      } else if (updated.reminderDateTime != null && updated.reminderDateTime!.isAfter(DateTime.now())) {
+        await NotificationService.cancel(
+            NotificationService.stableId('task_${todo.id}'));
+      } else if (updated.reminderDateTime != null &&
+          updated.reminderDateTime!.isAfter(DateTime.now())) {
         await NotificationService.scheduleReminder(
-          id: ('task_${todo.id}').hashCode.abs() % 2147483647,
+          id: NotificationService.stableId('task_${todo.id}'),
           title: '🔔 Task Reminder: ${updated.title}',
           dateTime: updated.reminderDateTime!,
           body: updated.description.isNotEmpty
@@ -165,7 +177,7 @@ class TodoProvider extends ChangeNotifier {
   Future<void> deleteTodo(String id) async {
     _todos.removeWhere((t) => t.id == id);
     notifyListeners();
-    await NotificationService.cancel(('task_$id').hashCode.abs() % 2147483647);
+    await NotificationService.cancel(NotificationService.stableId('task_$id'));
     await _db.deleteReminder('task_$id');
     await _db.softDeleteTodo(id);
   }

@@ -52,7 +52,7 @@ class DataExportService {
 
   /// Opens a file picker, reads the JSON backup file, and restores all data.
   /// Returns true on success, false on failure/cancel.
-  Future<bool> importFromFile() async {
+  Future<bool> importFromFile({required String uid}) async {
     try {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
@@ -69,12 +69,12 @@ class DataExportService {
       final jsonStr = await file.readAsString(encoding: utf8);
       final data = json.decode(jsonStr) as Map<String, dynamic>;
 
-      if (data['export_version'] == null) {
+      if (data['export_version'] != 1 || data['uid']?.toString() != uid) {
         debugPrint('[DataImport] Invalid backup file - missing export_version');
         return false;
       }
 
-      await DatabaseService.instance.importAllData(data);
+      await DatabaseService.instance.importAllData(data, uid: uid);
       debugPrint('[DataImport] Import successful from $filePath');
       return true;
     } catch (e) {

@@ -3,9 +3,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/screen_time_record.dart';
 import '../services/screen_time_service.dart';
+import '../services/database_service.dart';
 
 class ScreenTimeProvider extends ChangeNotifier {
   final ScreenTimeService _service = ScreenTimeService.instance;
+  final DatabaseService _db = DatabaseService.instance;
   static const _channel = MethodChannel('com.grow.app/settings');
 
   DailyScreenTimeSummary? _todaySummary;
@@ -32,14 +34,14 @@ class ScreenTimeProvider extends ChangeNotifier {
 
   double get weeklyDailyAverageHours {
     if (_weeklySummaries.isEmpty) return 0.0;
-    final totalSec = _weeklySummaries.fold(
-        0, (sum, s) => sum + s.totalDuration.inSeconds);
+    final totalSec =
+        _weeklySummaries.fold(0, (sum, s) => sum + s.totalDuration.inSeconds);
     return (totalSec / (_weeklySummaries.length * 3600.0));
   }
 
   Duration get thisWeekTotalDuration {
-    final sec = _weeklySummaries.fold(
-        0, (sum, s) => sum + s.totalDuration.inSeconds);
+    final sec =
+        _weeklySummaries.fold(0, (sum, s) => sum + s.totalDuration.inSeconds);
     return Duration(seconds: sec);
   }
 
@@ -57,13 +59,70 @@ class ScreenTimeProvider extends ChangeNotifier {
     return ((thisSec - lastSec) / lastSec) * 100.0;
   }
 
-  Future<void> loadScreenTime({bool isResume = false}) async {
+  Future<DailyScreenTimeSummary> _summaryForRange({
+    required String uid,
+    required DateTime startDate,
+    required DateTime endDate,
+    required String dateLabel,
+  }) async {
+    final live = await _service.getSummaryForRange(
+      startDate: startDate,
+      endDate: endDate,
+      dateLabel: dateLabel,
+    );
+    if (live.totalDuration > Duration.zero) {
+      if (startDate.year == endDate.year &&
+          startDate.month == endDate.month &&
+          startDate.day == endDate.day) {
+        await _db.upsertScreenTimeSummary(uid, live);
+      }
+      return live;
+    }
+
+    final apps = <AppUsageRecord>[];
+    var total = Duration.zero;
+    final categories = <String, Duration>{};
+    var day = DateTime(startDate.year, startDate.month, startDate.day);
+    final lastDay = DateTime(endDate.year, endDate.month, endDate.day);
+    while (!day.isAfter(lastDay)) {
+      final stored = await _db.getScreenTimeSummary(uid, _dateKey(day));
+      if (stored != null) {
+        total += stored.totalDuration;
+        apps.addAll(stored.appUsages);
+        for (final entry in stored.categoryBreakdown.entries) {
+          categories[entry.key] =
+              (categories[entry.key] ?? Duration.zero) + entry.value;
+        }
+      }
+      day = day.add(const Duration(days: 1));
+    }
+    return DailyScreenTimeSummary(
+      date: dateLabel,
+      totalDuration: total,
+      appUsages: apps,
+      categoryBreakdown: categories,
+    );
+  }
+
+  static String _dateKey(DateTime date) =>
+      '${date.year.toString().padLeft(4, '0')}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+
+  Future<void> loadScreenTime(
+      {bool isResume = false, String uid = 'local_user'}) async {
     if (!Platform.isAndroid) return;
 
-    if (isResume && _weeklySummaries.isNotEmpty && _prevWeeklySummaries.isNotEmpty) {
+    if (isResume &&
+        _weeklySummaries.isNotEmpty &&
+        _prevWeeklySummaries.isNotEmpty) {
       try {
-        _todaySummary = await _service.getTodayUsage();
         final todayStr = DateTime.now().toIso8601String().split('T')[0];
+        final now = DateTime.now();
+        _todaySummary = await _summaryForRange(
+          uid: uid,
+          startDate: DateTime(now.year, now.month, now.day),
+          endDate: now,
+          dateLabel: todayStr,
+        );
         final idx = _weeklySummaries.indexWhere((s) => s.date == todayStr);
         if (idx != -1 && _todaySummary != null) {
           _weeklySummaries[idx] = _todaySummary!;
@@ -79,17 +138,24 @@ class ScreenTimeProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
-      _todaySummary = await _service.getTodayUsage();
-      _hasPermission = true;
+      _hasPermission = await _service.hasPermission();
       _permissionChecked = true;
-
+      final todayNow = DateTime.now();
+      final todayStr = DateTime.now().toIso8601String().split('T')[0];
+      _todaySummary = await _summaryForRange(
+        uid: uid,
+        startDate: DateTime(todayNow.year, todayNow.month, todayNow.day),
+        endDate: todayNow,
+        dateLabel: todayStr,
+      );
       final now = DateTime.now();
 
       // Current week (Monday to Sunday)
       final mondayThisWeek = now.subtract(Duration(days: now.weekday - 1));
       final List<DailyScreenTimeSummary> thisWeekList = [];
       for (int i = 0; i < 7; i++) {
-        final d = DateTime(mondayThisWeek.year, mondayThisWeek.month, mondayThisWeek.day + i);
+        final d = DateTime(
+            mondayThisWeek.year, mondayThisWeek.month, mondayThisWeek.day + i);
         final dateStr = d.toIso8601String().split('T')[0];
 
         if (d.isAfter(DateTime(now.year, now.month, now.day))) {
@@ -101,15 +167,14 @@ class ScreenTimeProvider extends ChangeNotifier {
             categoryBreakdown: {},
           ));
         } else {
-          final isToday = d.year == now.year && d.month == now.month && d.day == now.day;
+          final isToday =
+              d.year == now.year && d.month == now.month && d.day == now.day;
           final start = DateTime(d.year, d.month, d.day);
-          final end = isToday ? now : DateTime(d.year, d.month, d.day, 23, 59, 59);
+          final end =
+              isToday ? now : DateTime(d.year, d.month, d.day, 23, 59, 59);
 
-          final sum = await _service.getSummaryForRange(
-            startDate: start,
-            endDate: end,
-            dateLabel: dateStr,
-          );
+          final sum = await _summaryForRange(
+              uid: uid, startDate: start, endDate: end, dateLabel: dateStr);
           thisWeekList.add(sum);
         }
       }
@@ -119,16 +184,14 @@ class ScreenTimeProvider extends ChangeNotifier {
       final mondayLastWeek = mondayThisWeek.subtract(const Duration(days: 7));
       final List<DailyScreenTimeSummary> lastWeekList = [];
       for (int i = 0; i < 7; i++) {
-        final d = DateTime(mondayLastWeek.year, mondayLastWeek.month, mondayLastWeek.day + i);
+        final d = DateTime(
+            mondayLastWeek.year, mondayLastWeek.month, mondayLastWeek.day + i);
         final dateStr = d.toIso8601String().split('T')[0];
         final start = DateTime(d.year, d.month, d.day);
         final end = DateTime(d.year, d.month, d.day, 23, 59, 59);
 
-        final sum = await _service.getSummaryForRange(
-          startDate: start,
-          endDate: end,
-          dateLabel: dateStr,
-        );
+        final sum = await _summaryForRange(
+            uid: uid, startDate: start, endDate: end, dateLabel: dateStr);
         lastWeekList.add(sum);
       }
       _prevWeeklySummaries = lastWeekList;
@@ -143,9 +206,11 @@ class ScreenTimeProvider extends ChangeNotifier {
   }
 
   /// Query 7 days (Monday..Sunday) for any selected week.
-  Future<List<DailyScreenTimeSummary>> getWeekDays(DateTime anyDateInWeek) async {
+  Future<List<DailyScreenTimeSummary>> getWeekDays(
+      DateTime anyDateInWeek) async {
     final now = DateTime.now();
-    final monday = anyDateInWeek.subtract(Duration(days: anyDateInWeek.weekday - 1));
+    final monday =
+        anyDateInWeek.subtract(Duration(days: anyDateInWeek.weekday - 1));
     final List<DailyScreenTimeSummary> result = [];
 
     for (int i = 0; i < 7; i++) {
@@ -161,11 +226,14 @@ class ScreenTimeProvider extends ChangeNotifier {
           categoryBreakdown: {},
         ));
       } else {
-        final isToday = d.year == now.year && d.month == now.month && d.day == now.day;
+        final isToday =
+            d.year == now.year && d.month == now.month && d.day == now.day;
         final start = DateTime(d.year, d.month, d.day);
-        final end = isToday ? now : DateTime(d.year, d.month, d.day, 23, 59, 59);
+        final end =
+            isToday ? now : DateTime(d.year, d.month, d.day, 23, 59, 59);
 
-        final sum = await _service.getSummaryForRange(
+        final sum = await _summaryForRange(
+          uid: 'local_user',
           startDate: start,
           endDate: end,
           dateLabel: dateStr,
@@ -177,7 +245,8 @@ class ScreenTimeProvider extends ChangeNotifier {
   }
 
   /// Query week-by-week summaries for a specific month (Week 1: 1-7, Week 2: 8-14, etc.)
-  Future<List<DailyScreenTimeSummary>> getMonthWeeks(int year, int month) async {
+  Future<List<DailyScreenTimeSummary>> getMonthWeeks(
+      int year, int month) async {
     final now = DateTime.now();
     final daysInMonth = DateUtils.getDaysInMonth(year, month);
     final List<DailyScreenTimeSummary> result = [];
@@ -210,7 +279,8 @@ class ScreenTimeProvider extends ChangeNotifier {
         ));
       } else {
         final effectiveEnd = end.isAfter(now) ? now : end;
-        final sum = await _service.getSummaryForRange(
+        final sum = await _summaryForRange(
+          uid: 'local_user',
           startDate: start,
           endDate: effectiveEnd,
           dateLabel: label,
@@ -228,8 +298,18 @@ class ScreenTimeProvider extends ChangeNotifier {
     final List<DailyScreenTimeSummary> result = [];
 
     const monthNames = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec'
     ];
 
     for (int m = 1; m <= 12; m++) {
@@ -248,7 +328,8 @@ class ScreenTimeProvider extends ChangeNotifier {
         ));
       } else {
         final effectiveEnd = end.isAfter(now) ? now : end;
-        final sum = await _service.getSummaryForRange(
+        final sum = await _summaryForRange(
+          uid: 'local_user',
           startDate: start,
           endDate: effectiveEnd,
           dateLabel: monthName,

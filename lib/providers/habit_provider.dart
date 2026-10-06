@@ -31,7 +31,7 @@ class HabitProvider extends ChangeNotifier {
     notifyListeners();
     await _db.upsertHabit(newHabit);
     NotificationService.scheduleHabitStreakWarning(
-      id: habit.id.hashCode,
+      id: NotificationService.stableId(habit.id),
       habitTitle: habit.title,
     );
   }
@@ -53,15 +53,21 @@ class HabitProvider extends ChangeNotifier {
     history[dateStr] = !wasDone;
 
     final newStreak = Habit.calculateStreak(history);
-    if (!wasDone) {
-      // If completed today, cancel warning
-      await NotificationService.cancel(habit.id.hashCode);
-    } else {
-      // Reschedule warning if uncompleted today
-      await NotificationService.scheduleHabitStreakWarning(
-        id: habit.id.hashCode,
-        habitTitle: habit.title,
-      );
+
+    // BUG 7 FIX: Only touch notification scheduling when toggling TODAY.
+    // Toggling a past date must never cancel or reschedule future streak reminders.
+    final todayStr = _getTodayStr();
+    if (dateStr == todayStr) {
+      if (!wasDone) {
+        // Completed today — cancel today's streak warning
+        await NotificationService.cancel(NotificationService.stableId(habit.id));
+      } else {
+        // Uncompleted today — reschedule streak warning
+        await NotificationService.scheduleHabitStreakWarning(
+          id: NotificationService.stableId(habit.id),
+          habitTitle: habit.title,
+        );
+      }
     }
 
     final updated = habit.copyWith(
@@ -81,7 +87,14 @@ class HabitProvider extends ChangeNotifier {
   Future<void> deleteHabit(String id) async {
     _habits.removeWhere((h) => h.id == id);
     notifyListeners();
-    await NotificationService.cancel(id.hashCode);
+    await NotificationService.cancel(NotificationService.stableId(id));
     await _db.softDeleteHabit(id);
+  }
+
+  static String _getTodayStr() {
+    final now = DateTime.now();
+    return '${now.year.toString().padLeft(4, '0')}-'
+        '${now.month.toString().padLeft(2, '0')}-'
+        '${now.day.toString().padLeft(2, '0')}';
   }
 }

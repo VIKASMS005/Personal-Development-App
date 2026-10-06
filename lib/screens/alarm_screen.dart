@@ -1427,6 +1427,7 @@ class _AlarmScreenState extends State<AlarmScreen>
             id: 2001,
             title: 'Timer Complete! 🔔',
             body: 'Your focus session is complete!',
+            isTimer: true,
           );
           if (mounted) {
             _showTimerCompletionDialog();

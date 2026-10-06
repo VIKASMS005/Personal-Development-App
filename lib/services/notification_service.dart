@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -9,6 +8,19 @@ import 'package:timezone/data/latest.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
 
 class NotificationService {
+  /// Deterministic FNV-1a 32-bit hash for a [String] id.
+  /// Unlike Dart's [String.hashCode], this is stable across app restarts,
+  /// so notification cancel/update calls always target the correct OS alarm.
+  static int stableId(String id) {
+    var hash = 0x811c9dc5;
+    for (final unit in id.codeUnits) {
+      hash ^= unit;
+      hash = (hash * 0x01000193) & 0xFFFFFFFF;
+    }
+    // Ensure positive and within Android's 32-bit signed int range
+    return hash & 0x7FFFFFFF;
+  }
+
   static final FlutterLocalNotificationsPlugin _plugin =
       FlutterLocalNotificationsPlugin();
 
@@ -17,16 +29,25 @@ class NotificationService {
   static const String _channelDesc =
       'High-priority notifications for reminders, task alerts, and habit tracking';
 
-  static const String _alarmChannelId = 'grow_alarm_loud_channel_v10';
+  static const String _alarmChannelId = 'grow_alarm_loud_channel_v12';
   static const String _alarmChannelName = 'Grow Loud Alarms';
   static const String _alarmChannelDesc =
       'High-priority alarm stream notifications that ring aloud with vibration';
+
+  static const String _timerChannelId = 'grow_timer_loud_channel_v12';
+  static const String _timerChannelName = 'Grow Focus Timers';
+  static const String _timerChannelDesc =
+      'Loud timer completion alerts playing on the alarm audio stream';
 
   static Timer? _ringtoneAutoOffTimer;
 
   /// Callback invoked when a reminder notification is tapped.
   /// Set this from the app once ReminderProvider is available.
   static void Function(String reminderId)? onReminderTapped;
+
+  /// Callback invoked when an alarm notification is tapped or triggered.
+  /// Passes (alarmId, label, snoozeCount).
+  static void Function(String alarmId, String label, int snoozeCount)? onAlarmTriggered;
 
   static Future<void> init() async {
     tz.initializeTimeZones();
@@ -52,12 +73,20 @@ class NotificationService {
       const InitializationSettings(android: android, iOS: darwin, macOS: darwin),
       onDidReceiveNotificationResponse: (details) {
         debugPrint('Notification tapped: payload=${details.payload}');
-        stopRingtone();
-        // Auto-complete reminder if payload starts with 'reminder:'
         final payload = details.payload ?? '';
         if (payload.startsWith('reminder:')) {
+          stopRingtone();
           final reminderId = payload.substring('reminder:'.length);
           onReminderTapped?.call(reminderId);
+        } else if (payload.startsWith('alarm:')) {
+          // Format: 'alarm:$alarmId:$title:$snoozeCount'
+          final parts = payload.split(':');
+          if (parts.length >= 4) {
+            final alarmId = parts[1];
+            final title = parts[2];
+            final snoozeCount = int.tryParse(parts[3]) ?? 0;
+            onAlarmTriggered?.call(alarmId, title, snoozeCount);
+          }
         }
       },
     );
@@ -78,19 +107,35 @@ class NotificationService {
       );
       await androidPlugin.createNotificationChannel(remindersChannel);
 
-      // 2. Dedicated Alarm channel
+      // 2. Dedicated Alarm channel with bundled raw alarm audio
       final alarmChannel = AndroidNotificationChannel(
         _alarmChannelId,
         _alarmChannelName,
         description: _alarmChannelDesc,
         importance: Importance.max,
         playSound: true,
+        sound: const RawResourceAndroidNotificationSound('alarm_ringtone'),
         enableVibration: true,
         vibrationPattern: Int64List.fromList([0, 1000, 500, 1000, 500, 1000, 500, 1000]),
         audioAttributesUsage: AudioAttributesUsage.alarm,
         showBadge: true,
       );
       await androidPlugin.createNotificationChannel(alarmChannel);
+
+      // 3. Dedicated Timer channel with bundled raw timer audio
+      final timerChannel = AndroidNotificationChannel(
+        _timerChannelId,
+        _timerChannelName,
+        description: _timerChannelDesc,
+        importance: Importance.max,
+        playSound: true,
+        sound: const RawResourceAndroidNotificationSound('timer_ringtone'),
+        enableVibration: true,
+        vibrationPattern: Int64List.fromList([0, 800, 300, 800, 300, 800]),
+        audioAttributesUsage: AudioAttributesUsage.alarm,
+        showBadge: true,
+      );
+      await androidPlugin.createNotificationChannel(timerChannel);
     }
 
     await requestPermissions();
@@ -120,13 +165,13 @@ class NotificationService {
   static Future<void> playAlarmRingtone() async {
     try {
       _ringtoneAutoOffTimer?.cancel();
-      // Respects device alarm volume slider without hardcoded force
+      // Loud looping alarm sound using Android's alarm audio stream
       await FlutterRingtonePlayer().playAlarm(
         looping: true,
         asAlarm: true,
       );
-      // Auto-silence alarm after 2 minutes if unattended
-      _ringtoneAutoOffTimer = Timer(const Duration(minutes: 2), () {
+      // Auto-silence alarm after 3 minutes if unattended
+      _ringtoneAutoOffTimer = Timer(const Duration(minutes: 3), () {
         stopRingtone();
       });
     } catch (e) {
@@ -134,16 +179,17 @@ class NotificationService {
     }
   }
 
-  /// Plays a 7-second ringtone for Timer completion that respects device volume
+  /// Plays a loud, looping alarm ringtone when a focus timer finishes
   static Future<void> playTimerRingtone() async {
     try {
       _ringtoneAutoOffTimer?.cancel();
-      // asAlarm: false ensures it respects the user's current notification/media volume
-      await FlutterRingtonePlayer().playNotification(
+      // Uses the alarm audio stream so it rings aloud even in silent/vibrate mode
+      await FlutterRingtonePlayer().playAlarm(
         looping: true,
-        asAlarm: false,
+        asAlarm: true,
       );
-      _ringtoneAutoOffTimer = Timer(const Duration(seconds: 7), () {
+      // Auto-silence timer ringtone after 30 seconds if unattended
+      _ringtoneAutoOffTimer = Timer(const Duration(seconds: 30), () {
         stopRingtone();
       });
     } catch (e) {
@@ -155,7 +201,6 @@ class NotificationService {
   static Future<void> playReminderRingtone() async {
     try {
       _ringtoneAutoOffTimer?.cancel();
-      // asAlarm: false ensures it respects the user's current notification/media volume
       await FlutterRingtonePlayer().playNotification(
         looping: true,
         asAlarm: false,
@@ -182,16 +227,28 @@ class NotificationService {
     required int id,
     required String title,
     required String body,
+    String? channelId,
+    String? channelName,
+    AndroidNotificationSound? sound,
+    bool isTimer = false,
   }) async {
+    final targetChannelId = channelId ?? (isTimer ? _timerChannelId : _channelId);
+    final targetChannelName = channelName ?? (isTimer ? _timerChannelName : _channelName);
+    final targetSound = sound ?? (isTimer ? const RawResourceAndroidNotificationSound('timer_ringtone') : null);
+
     final androidDetails = AndroidNotificationDetails(
-      _channelId,
-      _channelName,
-      channelDescription: _channelDesc,
+      targetChannelId,
+      targetChannelName,
+      channelDescription: isTimer ? _timerChannelDesc : _channelDesc,
       importance: Importance.max,
       priority: Priority.max,
+      audioAttributesUsage: isTimer ? AudioAttributesUsage.alarm : AudioAttributesUsage.notification,
+      sound: targetSound,
       playSound: true,
       enableVibration: true,
-      vibrationPattern: Int64List.fromList([0, 800, 300, 800, 300, 800]),
+      vibrationPattern: isTimer
+          ? Int64List.fromList([0, 1000, 500, 1000, 500, 1000])
+          : Int64List.fromList([0, 800, 300, 800, 300, 800]),
       fullScreenIntent: true,
       visibility: NotificationVisibility.public,
     );
@@ -268,13 +325,14 @@ class NotificationService {
     }
   }
 
-  /// Schedules an alarm with native alarmClock trigger and auto-off missed alarm notification
+  /// Schedules an alarm with native alarmClock trigger, 3-snooze cycle, and auto-off missed alarm notification
   static Future<void> scheduleAlarm({
     required int id,
     required String title,
     required DateTime dateTime,
     String body = 'Time to wake up and start your routine!',
     DateTimeComponents? matchDateTimeComponents,
+    int initialSnoozeCount = 0,
   }) async {
     final androidDetails = AndroidNotificationDetails(
       _alarmChannelId,
@@ -283,6 +341,7 @@ class NotificationService {
       importance: Importance.max,
       priority: Priority.max,
       audioAttributesUsage: AudioAttributesUsage.alarm,
+      sound: const RawResourceAndroidNotificationSound('alarm_ringtone'),
       fullScreenIntent: true,
       playSound: true,
       enableVibration: true,
@@ -296,8 +355,9 @@ class NotificationService {
       return;
     }
 
-    // 1. Initial Alarm Trigger
     final t1 = tz.TZDateTime.now(tz.local).add(duration);
+
+    // 1. Initial Alarm Trigger (or current snooze)
     await _scheduleZoned(
       id: id,
       title: '⏰ $title',
@@ -305,33 +365,85 @@ class NotificationService {
       scheduledDate: t1,
       details: androidDetails,
       isAlarm: true,
+      payload: 'alarm:$id:$title:$initialSnoozeCount',
       matchDateTimeComponents: matchDateTimeComponents,
     );
 
-    // 2. Repeat 1 (3 minutes later)
-    final t2 = t1.add(const Duration(minutes: 3));
-    await _scheduleZoned(
-      id: id + 100000,
-      title: '⏰ (Repeat 1/3) $title',
-      body: 'Alarm repeat 1 of 3: $body',
-      scheduledDate: t2,
-      details: androidDetails,
-      isAlarm: true,
-    );
+    // If starting from 0, schedule the 3 automatic snoozes (+5m, +10m, +15m) and missed alarm (+20m)
+    if (initialSnoozeCount == 0) {
+      // 2. Snooze 1 of 3 (5 minutes later)
+      final t2 = t1.add(const Duration(minutes: 5));
+      await _scheduleZoned(
+        id: id + 100000,
+        title: '⏰ (Snooze 1/3) $title',
+        body: 'Alarm snooze 1 of 3: $body',
+        scheduledDate: t2,
+        details: androidDetails,
+        isAlarm: true,
+        payload: 'alarm:$id:$title:1',
+      );
 
-    // 3. Repeat 2 (6 minutes later)
-    final t3 = t1.add(const Duration(minutes: 6));
-    await _scheduleZoned(
-      id: id + 200000,
-      title: '⏰ (Repeat 2/3) $title',
-      body: 'Alarm repeat 2 of 3: $body',
-      scheduledDate: t3,
-      details: androidDetails,
-      isAlarm: true,
-    );
+      // 3. Snooze 2 of 3 (10 minutes later)
+      final t3 = t1.add(const Duration(minutes: 10));
+      await _scheduleZoned(
+        id: id + 200000,
+        title: '⏰ (Snooze 2/3) $title',
+        body: 'Alarm snooze 2 of 3: $body',
+        scheduledDate: t3,
+        details: androidDetails,
+        isAlarm: true,
+        payload: 'alarm:$id:$title:2',
+      );
 
-    // 4. Auto-off & Missed Alarm Notification (9 minutes later if user didn't turn off manually)
-    final t4 = t1.add(const Duration(minutes: 9));
+      // 4. Snooze 3 of 3 (15 minutes later - Final Snooze)
+      final t4 = t1.add(const Duration(minutes: 15));
+      await _scheduleZoned(
+        id: id + 300000,
+        title: '⏰ (Snooze 3/3 - Final) $title',
+        body: 'Final alarm! No more snoozes remaining.',
+        scheduledDate: t4,
+        details: androidDetails,
+        isAlarm: true,
+        payload: 'alarm:$id:$title:3',
+      );
+
+      // 5. Auto-off & Missed Alarm Notification (20 minutes later if user never turned it off)
+      final t5 = t1.add(const Duration(minutes: 20));
+      final missedDetails = AndroidNotificationDetails(
+        _alarmChannelId,
+        _alarmChannelName,
+        channelDescription: _alarmChannelDesc,
+        importance: Importance.high,
+        priority: Priority.high,
+        playSound: true,
+        enableVibration: true,
+        category: AndroidNotificationCategory.alarm,
+        visibility: NotificationVisibility.public,
+      );
+      await _scheduleZoned(
+        id: id + 400000,
+        title: '⏰ Missed Alarm: $title',
+        body: 'Alarm rang 3 times and was automatically turned off.',
+        scheduledDate: t5,
+        details: missedDetails,
+        isAlarm: false,
+      );
+    }
+  }
+
+  static Future<void> cancelAlarm(int id) async {
+    await _plugin.cancel(id);
+    await _plugin.cancel(id + 100000);
+    await _plugin.cancel(id + 200000);
+    await _plugin.cancel(id + 300000);
+    await _plugin.cancel(id + 400000);
+  }
+
+  static Future<void> sendMissedAlarmNotification({
+    required int id,
+    required String title,
+    required String timeStr,
+  }) async {
     final missedDetails = AndroidNotificationDetails(
       _alarmChannelId,
       _alarmChannelName,
@@ -343,21 +455,12 @@ class NotificationService {
       category: AndroidNotificationCategory.alarm,
       visibility: NotificationVisibility.public,
     );
-    await _scheduleZoned(
-      id: id + 300000,
-      title: '⏰ Missed Alarm: $title',
-      body: 'Alarm rang 3 times and was automatically turned off.',
-      scheduledDate: t4,
-      details: missedDetails,
-      isAlarm: false,
+    await _plugin.show(
+      id + 400000,
+      '⏰ Missed Alarm: $title',
+      'Alarm for $timeStr was missed after 3 snoozes.',
+      NotificationDetails(android: missedDetails),
     );
-  }
-
-  static Future<void> cancelAlarm(int id) async {
-    await _plugin.cancel(id);
-    await _plugin.cancel(id + 100000);
-    await _plugin.cancel(id + 200000);
-    await _plugin.cancel(id + 300000);
   }
 
   static Future<void> scheduleReminder({
@@ -516,15 +619,48 @@ class NotificationService {
   ];
 
   static Future<void> scheduleDailyInspiration() async {
-    final random = Random();
-    final quote = _dailyQuotes[random.nextInt(_dailyQuotes.length)];
-    await scheduleDailyReminder(
-      id: 9999,
-      title: quote.$1,
-      body: quote.$2,
-      hour: 9,
-      minute: 0,
-    );
+    // BUG 9 FIX: Cancel the old recurring single-quote notification, then schedule
+    // 7 individual one-shot notifications (one per day for the next 7 days),
+    // each using a different quote. This way users see a fresh quote every day.
+    await _plugin.cancel(9999); // cancel old recurring
+
+    final now = DateTime.now();
+    for (int i = 0; i < 7; i++) {
+      final day = now.add(Duration(days: i));
+      final quoteIndex = (day.difference(DateTime(day.year, 1, 1)).inDays) % _dailyQuotes.length;
+      final quote = _dailyQuotes[quoteIndex];
+
+      // Deliver at 9:00 AM of that day; skip today if 9 AM already passed
+      var deliveryTime = DateTime(day.year, day.month, day.day, 9, 0, 0);
+      if (deliveryTime.isBefore(now)) continue;
+
+      final tzDelivery = tz.TZDateTime.from(deliveryTime, tz.local);
+      const androidDetails = AndroidNotificationDetails(
+        'daily_inspiration',
+        'Daily Inspiration',
+        channelDescription: 'Daily motivational quote',
+        importance: Importance.defaultImportance,
+        priority: Priority.defaultPriority,
+        playSound: false,
+        enableVibration: false,
+        styleInformation: BigTextStyleInformation(''),
+      );
+
+      // Use ID 9990..9996 for days 0-6 so they don't collide with each other
+      await _plugin.zonedSchedule(
+        9990 + i,
+        quote.$1,
+        quote.$2,
+        tzDelivery,
+        const NotificationDetails(
+          android: androidDetails,
+          iOS: DarwinNotificationDetails(presentAlert: true, presentSound: false),
+        ),
+        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+        uiLocalNotificationDateInterpretation:
+            UILocalNotificationDateInterpretation.absoluteTime,
+      );
+    }
   }
 
   static Future<void> cancel(int id) async {

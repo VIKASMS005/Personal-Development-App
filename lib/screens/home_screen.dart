@@ -23,6 +23,8 @@ import 'forms/finance_form.dart';
 import 'steps_screen.dart';
 import 'screen_time_screen.dart';
 import '../widgets/global_task_tracker_bar.dart';
+import '../widgets/alarm_ringing_dialog.dart';
+import '../models/alarm_model.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -34,10 +36,12 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   int _currentIndex = 0;
   Timer? _alarmWatcherTimer;
-  String? _lastRungAlarmId;
-  int _lastRungMinute = -1;
-  String? _lastRungReminderId;
-  int _lastRungReminderMinute = -1;
+
+  // BUG 4 FIX: Use Sets keyed by (minute) so multiple alarms at the same
+  // clock-minute are each rung exactly once and never spam-repeated.
+  final Set<String> _rungAlarmIdsThisMinute = {};
+  final Set<String> _rungReminderIdsThisMinute = {};
+  int _lastWatchedMinute = -1;
 
   final PageController _analyticsPageController = PageController();
   int _activeAnalyticsSlide = 0;
@@ -48,6 +52,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _requestNotificationPermission();
 
+    NotificationService.onAlarmTriggered = (alarmId, title, snoozeCount) {
+      if (!mounted) return;
+      final alarms = context.read<AlarmProvider>().alarms;
+      final alarm = alarms.firstWhere(
+        (a) => a.id == alarmId || NotificationService.stableId(a.id).toString() == alarmId,
+        orElse: () => AlarmModel(
+          id: alarmId,
+          uid: context.read<AuthProvider>().uid ?? 'local_user',
+          hour: DateTime.now().hour,
+          minute: DateTime.now().minute,
+          label: title,
+        ),
+      );
+      _showAlarmRingingDialog(alarm, snoozeCount: snoozeCount);
+    };
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadAllData();
       _startAlarmAndReminderWatcher();
@@ -57,11 +77,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      // Re-read hardware step sensor and refresh screen time when app returns to foreground
+      // FIX H1: On resume, only re-init the hardware sensor listener (not the full
+      // loadStepData which would create duplicate polling timers and re-register the
+      // method call handler). refreshStepData is lightweight — no tracker re-init.
       final auth = context.read<AuthProvider>();
       final uid = auth.uid ?? 'local_user';
       StepTrackerService.instance.reinit();
-      context.read<StepProvider>().loadStepData(uid);
+      context.read<StepProvider>().refreshStepData(uid);
       context.read<ScreenTimeProvider>().loadScreenTime(isResume: true);
       _rebuildEngine();
     }
@@ -72,67 +94,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _alarmWatcherTimer?.cancel();
     _analyticsPageController.dispose();
+    NotificationService.onAlarmTriggered = null;
     super.dispose();
   }
 
   bool _isShowingAlarmDialog = false;
 
-  void _showAlarmRingingDialog(String alarmLabel) {
+  void _showAlarmRingingDialog(AlarmModel alarm, {int snoozeCount = 0}) {
     if (_isShowingAlarmDialog || !mounted) return;
+    // BUG 13 FIX: Do not pop up dialog if app is transitioning to background/detached
+    if (WidgetsBinding.instance.lifecycleState != null &&
+        WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) {
+      return;
+    }
     _isShowingAlarmDialog = true;
-    NotificationService.playAlarmRingtone();
 
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (dialogCtx) => PopScope(
-        canPop: false,
-        child: AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          title: Row(
-            children: [
-              const Text('⏰ ', style: TextStyle(fontSize: 26)),
-              Expanded(
-                child: Text(
-                  alarmLabel.isNotEmpty ? alarmLabel : 'Alarm Ringing',
-                  style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 18),
-                ),
-              ),
-            ],
-          ),
-          content: const Text(
-            'Time for your scheduled routine! Wake up and attack the day.',
-            style: TextStyle(fontSize: 14),
-          ),
-          actionsAlignment: MainAxisAlignment.spaceBetween,
-          actions: [
-            TextButton.icon(
-              icon: const Icon(Icons.snooze_rounded),
-              label: const Text('Snooze (+5m)'),
-              onPressed: () {
-                NotificationService.stopRingtone();
-                _isShowingAlarmDialog = false;
-                Navigator.pop(dialogCtx);
-              },
-            ),
-            ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.error,
-                foregroundColor: Colors.white,
-              ),
-              icon: const Icon(Icons.alarm_off_rounded),
-              label: const Text('Dismiss'),
-              onPressed: () {
-                NotificationService.stopRingtone();
-                _isShowingAlarmDialog = false;
-                Navigator.pop(dialogCtx);
-              },
-            ),
-          ],
-        ),
-      ),
-    ).then((_) {
-      NotificationService.stopRingtone();
+    AlarmRingingDialog.show(context, alarm, snoozeCount: snoozeCount).then((_) {
       _isShowingAlarmDialog = false;
     });
   }
@@ -144,14 +121,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
       if (!mounted) return;
 
+      // BUG 4 FIX: When the clock minute changes, clear the rung-IDs Sets so
+      // alarms at the new minute can fire. Within the same minute, each ID is
+      // only allowed to ring once no matter how many 15-second ticks pass.
+      if (currentMinute != _lastWatchedMinute) {
+        _rungAlarmIdsThisMinute.clear();
+        _rungReminderIdsThisMinute.clear();
+        _lastWatchedMinute = currentMinute;
+      }
+
       // 1. Check Alarms
       final alarms = context.read<AlarmProvider>().alarms.where((a) => a.isEnabled).toList();
       for (final alarm in alarms) {
         if (alarm.hour == now.hour && alarm.minute == now.minute) {
-          if (_lastRungAlarmId != alarm.id || _lastRungMinute != currentMinute) {
-            _lastRungAlarmId = alarm.id;
-            _lastRungMinute = currentMinute;
-            _showAlarmRingingDialog(alarm.label);
+          // BUG 5 FIX: Only ring on the correct day of the week.
+          // daysOfWeek uses ISO weekday (1=Mon..7=Sun). Empty list = every day.
+          if (alarm.daysOfWeek.isNotEmpty && !alarm.daysOfWeek.contains(now.weekday)) {
+            continue;
+          }
+          if (!_rungAlarmIdsThisMinute.contains(alarm.id)) {
+            _rungAlarmIdsThisMinute.add(alarm.id);
+            _showAlarmRingingDialog(alarm, snoozeCount: 0);
             break;
           }
         }
@@ -166,9 +156,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             rDate.day == now.day &&
             rDate.hour == now.hour &&
             rDate.minute == now.minute) {
-          if (_lastRungReminderId != rem.id || _lastRungReminderMinute != currentMinute) {
-            _lastRungReminderId = rem.id;
-            _lastRungReminderMinute = currentMinute;
+          if (!_rungReminderIdsThisMinute.contains(rem.id)) {
+            _rungReminderIdsThisMinute.add(rem.id);
             NotificationService.playReminderRingtone();
             break;
           }
@@ -339,7 +328,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final stepProv = context.watch<StepProvider>();
     final screenProv = context.watch<ScreenTimeProvider>();
 
-    final pendingTodos = todos.todos.where((t) => !t.completed).toList();
+    // FIX C1: Use scheduledTasks (tasks only, not goals) for the task badge count.
+    // todos.todos includes both Tasks and Goals — using it would inflate the count.
+    final pendingTodos = todos.scheduledTasks; // tasks only, not completed, not missed
     final activeHabits = habits.habits;
     final todayStr = DateFormat('yyyy-MM-dd').format(DateTime.now());
     final habitsDoneToday = activeHabits.where((h) => h.history[todayStr] == true).length;
@@ -439,8 +430,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             },
             child: ListView(
               physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 80),
-              children: [
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 80),
+                children: [
               // ─── 1. Sliding Analytics Carousel (One Card at a Time) ───────
               SizedBox(
                 height: 250,

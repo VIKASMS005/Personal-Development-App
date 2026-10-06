@@ -127,7 +127,7 @@ class ChatbotProvider extends ChangeNotifier {
     // Finalize bot message — parse for action JSON blocks
     final parsedActionType = _extractActionType(finalText);
     final parsedActionData = parsedActionType != null
-        ? _extractActionData(finalText, parsedActionType)
+        ? _extractActionData(finalText, parsedActionType, uid)
         : null;
 
     final finalMsg = botPlaceholder.copyWith(
@@ -165,7 +165,7 @@ class ChatbotProvider extends ChangeNotifier {
     return null;
   }
 
-  String? _extractActionData(String text, String actionType) {
+  String? _extractActionData(String text, String actionType, String uid) {
     try {
       final jsonStr = _extractJsonBlock(text);
       if (jsonStr == null) return null;
@@ -175,7 +175,7 @@ class ChatbotProvider extends ChangeNotifier {
         // Convert to timetable slot maps
         final slots = (data['slots'] as List).map((s) {
           return {
-            'uid': '',
+            'uid': uid,
             'day_of_week': s['dayOfWeek'] ?? 'Daily',
             'start_time': s['startTime'] ?? '08:00 AM',
             'end_time': s['endTime'] ?? '09:00 AM',
@@ -268,8 +268,9 @@ class ChatbotProvider extends ChangeNotifier {
       final habit = Habit(
         uid: msg.uid,
         title: (data['title'] ?? 'New Habit').toString(),
-        frequency:
-            freqStr.contains('week') ? HabitFrequency.weekly : HabitFrequency.daily,
+        frequency: freqStr.contains('week')
+            ? HabitFrequency.weekly
+            : HabitFrequency.daily,
       );
       await habitProvider.addHabit(habit);
       await _db.markChatActionApplied(msg.id);

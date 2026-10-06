@@ -4,14 +4,15 @@ import '../../utils/app_colors.dart';
 
 class FinanceForm extends StatefulWidget {
   final FinanceTransaction? initial;
-  const FinanceForm({super.key, this.initial});
+  final DateTime? defaultDate;
+  const FinanceForm({super.key, this.initial, this.defaultDate});
 
-  static Future<FinanceTransaction?> show(BuildContext context, {FinanceTransaction? initial}) {
+  static Future<FinanceTransaction?> show(BuildContext context, {FinanceTransaction? initial, DateTime? defaultDate}) {
     return showDialog<FinanceTransaction?>(
       context: context,
       builder: (_) => Dialog(
         insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-        child: FinanceForm(initial: initial),
+        child: FinanceForm(initial: initial, defaultDate: defaultDate),
       ),
     );
   }
@@ -51,7 +52,7 @@ class _FinanceFormState extends State<FinanceForm> {
     _noteC = TextEditingController(text: t?.note ?? '');
     _category = t?.category ?? 'General';
     _isExpense = t != null ? t.amount < 0 : true;
-    _date = t?.date ?? DateTime.now();
+    _date = t?.date ?? widget.defaultDate ?? DateTime.now();
   }
 
   @override
