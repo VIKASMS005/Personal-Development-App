@@ -7,8 +7,32 @@ import '../widgets/empty_state.dart';
 import '../widgets/animated_card.dart';
 import 'forms/habit_form.dart';
 
-class HabitsScreen extends StatelessWidget {
+/// Case-insensitive match on a habit's title or its frequency
+/// (e.g. "daily", "weekly"). Every word typed must appear; an empty query
+/// matches everything.
+bool matchesHabitSearch(String title, String frequency, String query) {
+  final words = query.toLowerCase().split(RegExp(r'\s+')).where((w) => w.isNotEmpty);
+  final hay = '${title.toLowerCase()} ${frequency.toLowerCase()}';
+  return words.every(hay.contains);
+}
+
+class HabitsScreen extends StatefulWidget {
   const HabitsScreen({super.key});
+
+  @override
+  State<HabitsScreen> createState() => _HabitsScreenState();
+}
+
+class _HabitsScreenState extends State<HabitsScreen> {
+  final _searchC = TextEditingController();
+  String _query = '';
+
+  @override
+  void dispose() {
+    _searchC.dispose();
+    super.dispose();
+  }
+
 
   List<String> _getLast7Days() {
     final now = DateTime.now();
@@ -23,7 +47,10 @@ class HabitsScreen extends StatelessWidget {
     final theme = Theme.of(context);
     final auth = context.watch<AuthProvider>();
     final habitProvider = context.watch<HabitProvider>();
-    final habits = habitProvider.habits;
+    final allHabits = habitProvider.habits;
+    final habits = _query.trim().isEmpty
+        ? allHabits
+        : allHabits.where((h) => matchesHabitSearch(h.title, h.frequency.name, _query)).toList();
     final last7Days = _getLast7Days();
     final todayStr = DateFormat('yyyy-MM-dd').format(DateTime.now());
 
@@ -46,14 +73,48 @@ class HabitsScreen extends StatelessWidget {
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 800),
-          child: habits.isEmpty
+          child: allHabits.isEmpty
               ? EmptyState(
                   icon: Icons.local_fire_department_rounded,
                   title: 'No habits yet',
                   subtitle: 'Start small and build unstoppable daily streaks',
                   iconColor: AppColors.habits,
                 )
-              : ListView.builder(
+              : Column(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                      child: TextField(
+                        controller: _searchC,
+                        textInputAction: TextInputAction.search,
+                        decoration: InputDecoration(
+                          hintText: 'Search habits...',
+                          prefixIcon: const Icon(Icons.search_rounded, size: 20),
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                          suffixIcon: _query.isNotEmpty
+                              ? IconButton(
+                                  tooltip: 'Clear search',
+                                  icon: const Icon(Icons.clear_rounded, size: 18),
+                                  onPressed: () {
+                                    _searchC.clear();
+                                    setState(() => _query = '');
+                                  },
+                                )
+                              : null,
+                        ),
+                        onChanged: (val) => setState(() => _query = val),
+                      ),
+                    ),
+                    Expanded(
+                      child: habits.isEmpty
+                          ? EmptyState(
+                              icon: Icons.search_off_rounded,
+                              title: 'No matching habits',
+                              subtitle: 'No habit matches "${_query.trim()}"',
+                              iconColor: AppColors.habits,
+                            )
+                          : ListView.builder(
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 80),
               itemCount: habits.length,
               itemBuilder: (context, index) {
@@ -61,6 +122,7 @@ class HabitsScreen extends StatelessWidget {
                 final isDoneToday = h.history[todayStr] ?? false;
 
                 return AnimatedListItem(
+                  key: ValueKey(h.id),
                   index: index,
                   child: Padding(
                     padding: const EdgeInsets.only(bottom: 12),
@@ -113,7 +175,8 @@ class HabitsScreen extends StatelessWidget {
                                       ),
                                     ),
                                     const SizedBox(height: 4),
-                                    Row(
+                                    Wrap(
+                                      crossAxisAlignment: WrapCrossAlignment.center,
                                       children: [
                                         Icon(
                                           Icons.local_fire_department_rounded,
@@ -232,6 +295,9 @@ class HabitsScreen extends StatelessWidget {
                 );
               },
             ),
+                    ),
+                  ],
+                ),
         ),
       ),
     );

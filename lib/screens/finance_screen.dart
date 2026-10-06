@@ -452,8 +452,42 @@ class _FinanceScreenState extends State<FinanceScreen> {
                               style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
                             ),
                             const SizedBox(height: 8),
-                            const SizedBox(height: 4),
-                            Center(child: ExpensePieChart(transactions: filteredTxs)),
+                            // Pie chart only for the long views; short periods keep the simple list.
+                            if (isLongView)
+                              Center(child: ExpensePieChart(transactions: filteredTxs))
+                            else
+                              Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: categoryExpenses.entries.map((e) {
+                                final pct = expense > 0 ? (e.value / expense * 100).toStringAsFixed(0) : '0';
+                                return Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                  decoration: BoxDecoration(
+                                    color: theme.dividerColor.withValues(alpha: 0.15),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        e.key,
+                                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Text(
+                                        '₹${e.value.toStringAsFixed(0)} ($pct%)',
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w700,
+                                          color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              }).toList(),
+                            ),
                           ],
                         ],
                       ),

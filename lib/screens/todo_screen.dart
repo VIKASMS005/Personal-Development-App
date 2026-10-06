@@ -29,15 +29,6 @@ class _TodosScreenState extends State<TodosScreen>
     4: ('Low Priority', AppColors.lightTextSecondary),
   };
 
-  String _formatTrackedTime(int sec) {
-    final h = sec ~/ 3600;
-    final m = (sec % 3600) ~/ 60;
-    if (h > 0) {
-      return '${h}h ${m}m';
-    }
-    return '${m}m';
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -592,30 +583,6 @@ class _TodosScreenState extends State<TodosScreen>
                                                       ),
                                                     ),
 
-                                                    // Tracked Time Tag (tasks only; goals are not timed)
-                                                    if (t.isTask && t.timeSpentSeconds > 0)
-                                                      Container(
-                                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                                        decoration: BoxDecoration(
-                                                          color: AppColors.primary.withValues(alpha: 0.15),
-                                                          borderRadius: BorderRadius.circular(8),
-                                                        ),
-                                                        child: Row(
-                                                          mainAxisSize: MainAxisSize.min,
-                                                          children: [
-                                                            const Icon(Icons.timer_outlined, size: 11, color: AppColors.primary),
-                                                            const SizedBox(width: 3),
-                                                            Text(
-                                                              _formatTrackedTime(t.timeSpentSeconds),
-                                                              style: const TextStyle(
-                                                                fontSize: 10.5,
-                                                                fontWeight: FontWeight.w600,
-                                                                color: AppColors.primary,
-                                                              ),
-                                                            ),
-                                                          ],
-                                                        ),
-                                                      ),
                                                   ],
                                                 ),
                                                 // Deadline timeline (Goals only)
