@@ -20,7 +20,14 @@ class _TodosScreenState extends State<TodosScreen>
     with SingleTickerProviderStateMixin {
   int _selectedMainTab = 0; // 0=Tasks, 1=Goals
   int _selectedStatusFilter = 0; // 0=Scheduled/Active, 1=Completed, 2=Missed/Overdue, 3=All
+  final _searchC = TextEditingController();
   String _searchQuery = '';
+
+  @override
+  void dispose() {
+    _searchC.dispose();
+    super.dispose();
+  }
 
   static const _priorityLabels = {
     1: ('Urgent', AppColors.error),
@@ -274,6 +281,7 @@ class _TodosScreenState extends State<TodosScreen>
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                       child: TextField(
+                        controller: _searchC,
                         decoration: InputDecoration(
                           hintText: isGoalsTab ? 'Search goals...' : 'Search tasks...',
                           prefixIcon: const Icon(Icons.search_rounded, size: 20),
@@ -281,7 +289,11 @@ class _TodosScreenState extends State<TodosScreen>
                           suffixIcon: _searchQuery.isNotEmpty
                               ? IconButton(
                                   icon: const Icon(Icons.clear_rounded, size: 18),
-                                  onPressed: () => setState(() => _searchQuery = ''),
+                                  tooltip: 'Clear search',
+                                  onPressed: () {
+                                    _searchC.clear();
+                                    setState(() => _searchQuery = '');
+                                  },
                                 )
                               : null,
                         ),
