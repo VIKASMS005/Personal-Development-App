@@ -17,12 +17,13 @@ import android.os.Build
 import android.provider.Settings
 import android.util.Base64
 import android.util.Log
-import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
 
-class MainActivity : FlutterActivity() {
+// FlutterFragmentActivity is required by the Health Connect (health) plugin's permission flow.
+class MainActivity : FlutterFragmentActivity() {
     private val TAG = "GrowMainActivity"
     private val CHANNEL = "com.grow.app/settings"
     private val PREFS_NAME = "grow_step_prefs"

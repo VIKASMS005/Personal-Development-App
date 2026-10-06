@@ -979,6 +979,20 @@ class DatabaseService {
     }
   }
 
+  /// Raise a day's step count to [steps] if it is higher than what is stored (inserting
+  /// the row if missing). Never lowers a count. Used to fill past days from Health Connect.
+  /// Returns true if the stored value changed.
+  Future<bool> raiseStepCount(
+      String uid, String date, int steps, int goal) async {
+    final existing = await getStepRecord(uid, date);
+    if (existing != null && existing.stepCount >= steps) return false;
+    final record = (existing ??
+            StepRecord(uid: uid, date: date, stepCount: 0, goal: goal))
+        .copyWith(stepCount: steps, updatedAt: DateTime.now());
+    await upsertStepRecord(record);
+    return true;
+  }
+
   Future<StepRecord?> getStepRecord(String uid, String date) async {
     final db = await database;
     final res = await db.query(

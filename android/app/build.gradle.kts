@@ -17,7 +17,8 @@ android {
         applicationId = "com.example.flutter_application_1"
         // Minimum SDK — set to 23 if a plugin requires it, otherwise 21 is typical.
         // I set 23 (you can change to 21 if you prefer).
-        minSdk = flutter.minSdkVersion
+        // Health Connect (health plugin) requires API 26+.
+        minSdk = maxOf(26, flutter.minSdkVersion)
         targetSdk = 36
 
         versionCode = 1

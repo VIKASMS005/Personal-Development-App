@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/step_record.dart';
 import '../services/database_service.dart';
+import '../services/health_history_service.dart';
 import '../services/step_tracker_service.dart';
 
 class WeeklySummary {
@@ -278,6 +279,19 @@ class StepProvider extends ChangeNotifier {
 
     _isLoading = false;
     notifyListeners();
+
+    // Fill past days from Health Connect in the background (once per day).
+    _syncHealthHistory(uid);
+  }
+
+  /// Raise past days that the phone's health data shows as higher, then refresh history.
+  Future<void> _syncHealthHistory(String uid, {bool force = false}) async {
+    final raised = await HealthHistoryService.instance
+        .syncNow(uid, goal: _dailyGoal, force: force);
+    if (raised > 0) {
+      _historyRecords = await _db.getAllStepRecords(uid);
+      notifyListeners();
+    }
   }
 
   Future<void> _seedSeptemberRecordsOnce(String uid) async {
@@ -329,6 +343,7 @@ class StepProvider extends ChangeNotifier {
     _historyRecords = await _db.getAllStepRecords(uid);
 
     notifyListeners();
+    await _syncHealthHistory(uid, force: true);
   }
 
   Future<void> updateDailyGoal(String uid, int newGoal) async {
