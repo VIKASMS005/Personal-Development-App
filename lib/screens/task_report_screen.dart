@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
-import 'package:flutter_animate/flutter_animate.dart';
-import '../providers/app_providers.dart';
-import '../models/todo.dart';
 import '../models/task_session.dart';
-import '../utils/app_colors.dart';
+import '../providers/app_providers.dart';
+import '../services/task_analytics.dart';
+import '../theme/theme_context.dart';
+import '../widgets/date_stepper.dart';
 
+/// Task Analytics: how today, this week, this month and this year compare
+/// with the period before. Tasks only; goals are not analysed here.
 class TaskReportScreen extends StatefulWidget {
   const TaskReportScreen({super.key});
 
@@ -14,621 +16,630 @@ class TaskReportScreen extends StatefulWidget {
   State<TaskReportScreen> createState() => _TaskReportScreenState();
 }
 
-class _TaskReportScreenState extends State<TaskReportScreen>
-    with SingleTickerProviderStateMixin {
-  late TabController _tabController;
-  DateTime _selectedDate = DateTime.now();
+class _TaskReportScreenState extends State<TaskReportScreen> {
+  AnalyticsPeriod _period = AnalyticsPeriod.daily;
+  DateTime _anchor = clampToToday(DateTime.now());
+
+  void _setAnchor(DateTime d) => setState(() => _anchor = clampToToday(d));
 
   @override
-  void initState() {
-    super.initState();
-    _tabController = TabController(length: 2, vsync: this);
-  }
+  Widget build(BuildContext context) {
+    final todoProv = context.watch<TodoProvider>();
+    final report = todoProv.analytics().report(_period, _anchor);
+    final next = nextAnchor(_period, _anchor);
 
-  @override
-  void dispose() {
-    _tabController.dispose();
-    super.dispose();
-  }
-
-  void _previousDay() {
-    setState(() {
-      _selectedDate = _selectedDate.subtract(const Duration(days: 1));
-    });
-  }
-
-  void _nextDay() {
-    setState(() {
-      _selectedDate = _selectedDate.add(const Duration(days: 1));
-    });
-  }
-
-  void _pickDate() async {
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: _selectedDate,
-      firstDate: DateTime(2020),
-      lastDate: DateTime(2035),
+    return Scaffold(
+      appBar: AppBar(title: const Text('Task Analytics')),
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 640),
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+            children: [
+              SizedBox(
+                width: double.infinity,
+                child: SegmentedButton<AnalyticsPeriod>(
+                  showSelectedIcon: false,
+                  style: const ButtonStyle(visualDensity: VisualDensity.compact),
+                  segments: const [
+                    ButtonSegment(value: AnalyticsPeriod.daily, label: Text('Daily')),
+                    ButtonSegment(value: AnalyticsPeriod.weekly, label: Text('Weekly')),
+                    ButtonSegment(value: AnalyticsPeriod.monthly, label: Text('Monthly')),
+                    ButtonSegment(value: AnalyticsPeriod.yearly, label: Text('Yearly')),
+                  ],
+                  selected: {_period},
+                  onSelectionChanged: (s) => setState(() {
+                    _period = s.first;
+                    _anchor = clampToToday(DateTime.now());
+                  }),
+                ),
+              ),
+              const SizedBox(height: 4),
+              DateStepper(
+                label: _periodLabel(report.range),
+                onPrevious: () => _setAnchor(previousAnchor(_period, _anchor)),
+                onNext: next == null ? null : () => _setAnchor(next),
+                onTapLabel: () async {
+                  final picked = await pickPastDate(context, _anchor);
+                  if (picked != null) _setAnchor(picked);
+                },
+              ),
+              const SizedBox(height: 8),
+              if (report.current.total == 0 &&
+                  report.current.focusSeconds == 0 &&
+                  report.previous.total == 0 &&
+                  report.previous.focusSeconds == 0)
+                _EmptyPeriod(period: _period)
+              else ...[
+                _SummaryCard(report: report, previousLabel: _previousLabel()),
+                const SizedBox(height: 12),
+                _ChartCard(report: report),
+                const SizedBox(height: 12),
+                _ComparisonCard(report: report, previousLabel: _previousLabel()),
+                if (_period == AnalyticsPeriod.daily) ...[
+                  const SizedBox(height: 12),
+                  _SessionsCard(sessions: todoProv.sessionsOn(_anchor)),
+                ],
+              ],
+            ],
+          ),
+        ),
+      ),
     );
-    if (picked != null) {
-      setState(() => _selectedDate = picked);
+  }
+
+  bool get _isCurrentPeriod => rangeFor(_period, DateTime.now()).contains(_anchor);
+
+  String _periodLabel(DateRange range) {
+    switch (_period) {
+      case AnalyticsPeriod.daily:
+        return _isCurrentPeriod
+            ? 'Today, ${DateFormat('MMM d').format(_anchor)}'
+            : DateFormat('EEE, MMM d, y').format(_anchor);
+      case AnalyticsPeriod.weekly:
+        final last = range.end.subtract(const Duration(days: 1));
+        final sameMonth = range.start.month == last.month;
+        final span = sameMonth
+            ? '${DateFormat('MMM d').format(range.start)}–${last.day}'
+            : '${DateFormat('MMM d').format(range.start)} – ${DateFormat('MMM d').format(last)}';
+        return _isCurrentPeriod ? 'This week, $span' : span;
+      case AnalyticsPeriod.monthly:
+        return DateFormat('MMMM y').format(range.start);
+      case AnalyticsPeriod.yearly:
+        return '${range.start.year}';
     }
   }
 
-  String _formatDuration(int seconds) {
-    final h = seconds ~/ 3600;
-    final m = (seconds % 3600) ~/ 60;
-    if (h > 0) {
-      return '${h}h ${m}m';
+  String _previousLabel() {
+    final current = _isCurrentPeriod;
+    switch (_period) {
+      case AnalyticsPeriod.daily:
+        return current ? 'yesterday' : 'the day before';
+      case AnalyticsPeriod.weekly:
+        return current ? 'last week' : 'the week before';
+      case AnalyticsPeriod.monthly:
+        return current ? 'last month' : 'the month before';
+      case AnalyticsPeriod.yearly:
+        return current ? 'last year' : 'the year before';
     }
-    return '${m}m';
+  }
+}
+
+String formatFocus(int seconds) {
+  if (seconds > 0 && seconds < 60) return '<1m';
+  final h = seconds ~/ 3600;
+  final m = (seconds % 3600) ~/ 60;
+  if (h > 0) return '${h}h ${m.toString().padLeft(2, '0')}m';
+  return '${m}m';
+}
+
+/// Short duration for chart labels: "42m", "1.5h", "36h".
+String _shortFocus(int seconds) {
+  if (seconds < 3600) return formatFocus(seconds);
+  final h = seconds / 3600;
+  return h >= 10 ? '${h.round()}h' : '${h.toStringAsFixed(1)}h';
+}
+
+/// Main insight sentence, e.g. "You focused 25m more than yesterday."
+String insightFor(PeriodReport r, String previousLabel) {
+  final cur = r.current.focusSeconds;
+  final prev = r.previous.focusSeconds;
+  if (cur == 0 && prev == 0) return 'No focus time recorded yet.';
+  if (prev == 0) return 'No focus time $previousLabel to compare with.';
+  final diff = r.focusChange;
+  if (diff.abs() < 60) return 'About the same focus time as $previousLabel.';
+  final pct = r.focusChangePercent!;
+  return diff > 0
+      ? 'You focused ${formatFocus(diff)} more than $previousLabel (+$pct%).'
+      : 'You focused ${formatFocus(-diff)} less than $previousLabel ($pct%).';
+}
+
+class _SummaryCard extends StatelessWidget {
+  final PeriodReport report;
+  final String previousLabel;
+  const _SummaryCard({required this.report, required this.previousLabel});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = report.current;
+    final colors = context.colors;
+    final diff = report.focusChange;
+    final up = diff >= 60;
+    final down = diff <= -60;
+
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Focus time', style: context.text.labelMedium?.copyWith(color: colors.textSecondary)),
+            const SizedBox(height: 2),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Flexible(
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      formatFocus(c.focusSeconds),
+                      style: context.text.displaySmall?.copyWith(color: colors.textPrimary, fontWeight: FontWeight.w800),
+                    ),
+                  ),
+                ),
+                if (up || down) ...[
+                  const SizedBox(width: 10),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: up ? colors.successContainer : colors.errorContainer,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(up ? Icons.arrow_upward_rounded : Icons.arrow_downward_rounded,
+                            size: 14, color: up ? colors.success : colors.error),
+                        const SizedBox(width: 2),
+                        Text(formatFocus(diff.abs()),
+                            style: context.text.labelMedium
+                                ?.copyWith(color: up ? colors.success : colors.error, fontWeight: FontWeight.w700)),
+                      ],
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              insightFor(report, previousLabel),
+              style: context.text.bodyMedium?.copyWith(color: colors.textSecondary),
+            ),
+            const SizedBox(height: 16),
+            Divider(height: 1, color: colors.divider),
+            const SizedBox(height: 12),
+            IntrinsicHeight(
+              child: Row(
+                children: [
+                  _Stat(label: 'Completed', value: c.completed, dot: colors.chartPrimary),
+                  VerticalDivider(width: 1, color: colors.divider),
+                  _Stat(label: 'Missed', value: c.missed, dot: colors.error),
+                  VerticalDivider(width: 1, color: colors.divider),
+                  _Stat(label: 'Pending', value: c.pending, dot: colors.chartMuted),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _Stat extends StatelessWidget {
+  final String label;
+  final int value;
+  final Color dot;
+  const _Stat({required this.label, required this.value, required this.dot});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return Expanded(
+      child: Semantics(
+        label: '$label: $value',
+        excludeSemantics: true,
+        child: Column(
+          children: [
+            Text(
+              '$value',
+              style: context.text.headlineSmall?.copyWith(color: colors.textPrimary, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 2),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(width: 8, height: 8, decoration: BoxDecoration(color: dot, shape: BoxShape.circle)),
+                const SizedBox(width: 6),
+                Flexible(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: context.text.labelMedium?.copyWith(color: colors.textSecondary),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ChartCard extends StatelessWidget {
+  final PeriodReport report;
+  const _ChartCard({required this.report});
+
+  String get _title {
+    switch (report.period) {
+      case AnalyticsPeriod.daily:
+        return 'Focus time, last 7 days';
+      case AnalyticsPeriod.weekly:
+        return 'Focus time by day';
+      case AnalyticsPeriod.monthly:
+        return 'Focus time by week';
+      case AnalyticsPeriod.yearly:
+        return 'Focus time by month';
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final todoProv = context.watch<TodoProvider>();
-
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Task Tracker & Reports'),
-        bottom: TabBar(
-          controller: _tabController,
-          indicatorSize: TabBarIndicatorSize.tab,
-          tabs: const [
-            Tab(icon: Icon(Icons.assessment_rounded, size: 20), text: 'Daily Report'),
-            Tab(icon: Icon(Icons.trending_up_rounded, size: 20), text: 'Improvement & Trends'),
-          ],
-        ),
-      ),
-      body: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 800),
-          child: TabBarView(
-            controller: _tabController,
-            children: [
-              _buildDailyReportTab(theme, todoProv),
-              _buildImprovementTab(theme, todoProv),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  // ==================== 1. DAILY REPORT TAB ====================
-  Widget _buildDailyReportTab(ThemeData theme, TodoProvider todoProv) {
-    final report = todoProv.getDailyReport(_selectedDate);
-    final totalSeconds = report['totalSeconds'] as int;
-    final completedTasks = report['completedTasks'] as List<Todo>;
-    final pendingTasks = report['pendingTasks'] as List<Todo>;
-    final categoryTime = report['categoryTime'] as Map<String, int>;
-    final completionRate = report['completionRate'] as int;
-    final daySessions = report['daySessions'] as List<TaskSession>;
-
-    final isToday = DateUtils.isSameDay(_selectedDate, DateTime.now());
-
-    return ListView(
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
-      children: [
-        // 1. Date Selector Bar
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-          decoration: BoxDecoration(
-            color: theme.cardTheme.color ?? theme.colorScheme.surface,
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: theme.dividerColor.withValues(alpha: 0.2)),
-          ),
-          child: Row(
-            children: [
-              IconButton(
-                visualDensity: VisualDensity.compact,
-                icon: const Icon(Icons.chevron_left_rounded),
-                tooltip: 'Previous Day',
-                onPressed: _previousDay,
-              ),
-              Expanded(
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(12),
-                  onTap: _pickDate,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Icon(Icons.calendar_month_rounded, size: 16, color: AppColors.tasks),
-                        const SizedBox(width: 6),
-                        Flexible(
-                          child: Text(
-                            isToday
-                                ? 'Today • ${DateFormat('MMM d').format(_selectedDate)}'
-                                : DateFormat('EEE, MMM d').format(_selectedDate),
-                            style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        const SizedBox(width: 4),
-                        const Icon(Icons.arrow_drop_down_rounded, size: 18),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-              IconButton(
-                visualDensity: VisualDensity.compact,
-                icon: const Icon(Icons.chevron_right_rounded),
-                tooltip: 'Next Day',
-                onPressed: _nextDay,
-              ),
-            ],
-          ),
-        ).animate().fadeIn(duration: 300.ms),
-        const SizedBox(height: 16),
-
-        // 2. Summary Metric Cards Grid
-        Row(
+    final colors = context.colors;
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Expanded(
-              child: _buildMetricCard(
-                theme: theme,
-                title: 'Total Tracked',
-                value: _formatDuration(totalSeconds),
-                subtitle: '${daySessions.length} sessions logged',
-                icon: Icons.timer_rounded,
-                color: AppColors.tasks,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _buildMetricCard(
-                theme: theme,
-                title: 'Completion Rate',
-                value: '$completionRate%',
-                subtitle: '${completedTasks.length} done / ${pendingTasks.length} pending',
-                icon: Icons.check_circle_rounded,
-                color: completionRate >= 70 ? AppColors.success : AppColors.warning,
-              ),
-            ),
-          ],
-        ).animate().fadeIn(delay: 100.ms),
-        const SizedBox(height: 16),
-
-        // 3. Category Breakdown Card
-        if (categoryTime.isNotEmpty) ...[
-          Container(
-            padding: const EdgeInsets.all(18),
-            decoration: BoxDecoration(
-              color: theme.cardTheme.color ?? theme.colorScheme.surface,
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: theme.dividerColor.withValues(alpha: 0.2)),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    const Icon(Icons.pie_chart_rounded, color: AppColors.primary, size: 18),
-                    const SizedBox(width: 8),
-                    Text(
-                      'Time by Category',
-                      style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 14),
-                ...categoryTime.entries.map((e) {
-                  final pct = totalSeconds > 0 ? (e.value / totalSeconds) : 0.0;
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(e.key, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
-                            Text(_formatDuration(e.value),
-                                style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13)),
-                          ],
-                        ),
-                        const SizedBox(height: 5),
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(4),
-                          child: LinearProgressIndicator(
-                            value: pct,
-                            minHeight: 6,
-                            backgroundColor: theme.dividerColor.withValues(alpha: 0.15),
-                            valueColor: const AlwaysStoppedAnimation<Color>(AppColors.tasks),
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                }),
-              ],
-            ),
-          ).animate().fadeIn(delay: 150.ms),
-          const SizedBox(height: 16),
-        ],
-
-        // 4. Tasks Completed (Done)
-        _buildSectionHeader(theme, 'Tasks Completed (${completedTasks.length})', Icons.task_alt_rounded, AppColors.success),
-        const SizedBox(height: 8),
-        if (completedTasks.isEmpty)
-          _buildEmptyText('No completed tasks recorded for this date.')
-        else
-          ...completedTasks.map((t) => _buildTaskItem(theme, t, isDone: true)),
-        const SizedBox(height: 18),
-
-        // 5. Tasks Not Done (Pending)
-        _buildSectionHeader(theme, 'Tasks Not Done / Pending (${pendingTasks.length})', Icons.pending_actions_rounded, AppColors.warning),
-        const SizedBox(height: 8),
-        if (pendingTasks.isEmpty)
-          _buildEmptyText('All tasks are completed! Great job! 🎉')
-        else
-          ...pendingTasks.map((t) => _buildTaskItem(theme, t, isDone: false)),
-        const SizedBox(height: 24),
-      ],
-    );
-  }
-
-  // ==================== 2. IMPROVEMENT COMPARISON TAB ====================
-  Widget _buildImprovementTab(ThemeData theme, TodoProvider todoProv) {
-    final comp = todoProv.getImprovementComparison();
-
-    final todayMin = comp['todayMinutes'] as int;
-    final yesterdayMin = comp['yesterdayMinutes'] as int;
-    final todayDone = comp['todayCompleted'] as int;
-    final yesterdayDone = comp['yesterdayCompleted'] as int;
-    final dayChangePct = comp['dayTimeChangePct'] as int;
-
-    final curWeekHours = comp['currentWeekHours'] as String;
-    final priorWeekHours = comp['priorWeekHours'] as String;
-    final curWeekDailyAvg = comp['currentWeekDailyAvgMinutes'] as int;
-    final curWeekDone = comp['currentWeekCompleted'] as int;
-    final priorWeekDone = comp['priorWeekCompleted'] as int;
-    final weekChangePct = comp['weekTimeChangePct'] as int;
-
-    final thisMonthHours = comp['thisMonthHours'] as String;
-    final prevMonthHours = comp['prevMonthHours'] as String;
-    final thisMonthDone = comp['thisMonthCompleted'] as int;
-    final prevMonthDone = comp['prevMonthCompleted'] as int;
-    final monthChangePct = comp['monthTimeChangePct'] as int;
-
-    return ListView(
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
-      children: [
-        // 1. Day-to-Day Comparison Card
-        _buildComparisonCard(
-          theme: theme,
-          horizon: 'Day-to-Day Improvement',
-          period1Label: 'Today',
-          period1Value: '${todayMin}m tracked',
-          period1Extra: '$todayDone tasks completed',
-          period2Label: 'Yesterday',
-          period2Value: '${yesterdayMin}m tracked',
-          period2Extra: '$yesterdayDone tasks completed',
-          pctChange: dayChangePct,
-          icon: Icons.today_rounded,
-          accentColor: AppColors.tasks,
-        ).animate().fadeIn(delay: 50.ms),
-        const SizedBox(height: 16),
-
-        // 2. Week-to-Week Comparison Card
-        _buildComparisonCard(
-          theme: theme,
-          horizon: 'Week-to-Week Improvement',
-          period1Label: 'This Week',
-          period1Value: '${curWeekHours}h total',
-          period1Extra: 'Avg ${curWeekDailyAvg}m/day • $curWeekDone tasks',
-          period2Label: 'Last Week',
-          period2Value: '${priorWeekHours}h total',
-          period2Extra: '$priorWeekDone tasks completed',
-          pctChange: weekChangePct,
-          icon: Icons.view_week_rounded,
-          accentColor: AppColors.primary,
-        ).animate().fadeIn(delay: 150.ms),
-        const SizedBox(height: 16),
-
-        // 3. Month-to-Month Comparison Card
-        _buildComparisonCard(
-          theme: theme,
-          horizon: 'Month-to-Month Improvement',
-          period1Label: 'This Month',
-          period1Value: '${thisMonthHours}h tracked',
-          period1Extra: '$thisMonthDone tasks completed',
-          period2Label: 'Last Month',
-          period2Value: '${prevMonthHours}h tracked',
-          period2Extra: '$prevMonthDone tasks completed',
-          pctChange: monthChangePct,
-          icon: Icons.calendar_view_month_rounded,
-          accentColor: AppColors.secondary,
-        ).animate().fadeIn(delay: 250.ms),
-        const SizedBox(height: 24),
-      ],
-    );
-  }
-
-  // ==================== HELPER WIDGETS ====================
-
-  Widget _buildMetricCard({
-    required ThemeData theme,
-    required String title,
-    required String value,
-    required String subtitle,
-    required IconData icon,
-    required Color color,
-  }) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: theme.cardTheme.color ?? theme.colorScheme.surface,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: theme.dividerColor.withValues(alpha: 0.2)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(6),
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Icon(icon, color: color, size: 16),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  title,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    fontWeight: FontWeight.w700,
-                    color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
-                  ),
-                ),
+            Text(_title, style: context.text.titleSmall?.copyWith(color: colors.textPrimary, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 14),
+            _BarChart(buckets: report.chart),
+            if (report.period != AnalyticsPeriod.daily) ...[
+              const SizedBox(height: 12),
+              Text(
+                'Average ${formatFocus(report.dailyAverageFocus)} per day',
+                style: context.text.bodySmall?.copyWith(color: colors.textSecondary),
               ),
             ],
-          ),
-          const SizedBox(height: 10),
-          Text(
-            value,
-            style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            subtitle,
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.colorScheme.onSurface.withValues(alpha: 0.55),
-              fontSize: 11,
-            ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
+}
 
-  Widget _buildComparisonCard({
-    required ThemeData theme,
-    required String horizon,
-    required String period1Label,
-    required String period1Value,
-    required String period1Extra,
-    required String period2Label,
-    required String period2Value,
-    required String period2Extra,
-    required int pctChange,
-    required IconData icon,
-    required Color accentColor,
-  }) {
-    final isPositive = pctChange >= 0;
+/// One bar of focus time per bucket; the current day/week/month is
+/// highlighted, future buckets are left empty.
+class _BarChart extends StatelessWidget {
+  final List<ChartBucket> buckets;
+  const _BarChart({required this.buckets});
 
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: theme.cardTheme.color ?? theme.colorScheme.surface,
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: theme.dividerColor.withValues(alpha: 0.2)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+  static const _barArea = 110.0;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final maxValue = buckets.fold<int>(1, (m, b) => b.counts.focusSeconds > m ? b.counts.focusSeconds : m);
+
+    return Semantics(
+      label: buckets
+          .where((b) => !b.isFuture)
+          .map((b) => '${b.label}: ${formatFocus(b.counts.focusSeconds)}')
+          .join('; '),
+      excludeSemantics: true,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: accentColor.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Icon(icon, color: accentColor, size: 18),
-                  ),
-                  const SizedBox(width: 10),
-                  Text(
-                    horizon,
-                    style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
-                  ),
-                ],
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                decoration: BoxDecoration(
-                  color: (isPositive ? AppColors.success : AppColors.error).withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
+          for (final b in buckets)
+            Expanded(
+              child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: buckets.length > 8 ? 2 : 4),
+                child: Column(
                   children: [
-                    Icon(
-                      isPositive ? Icons.arrow_upward_rounded : Icons.arrow_downward_rounded,
-                      size: 14,
-                      color: isPositive ? AppColors.success : AppColors.error,
+                    SizedBox(
+                      height: 14,
+                      child: b.isFuture || b.counts.focusSeconds == 0
+                          ? null
+                          : FittedBox(
+                              child: Text(_shortFocus(b.counts.focusSeconds),
+                                  style: context.text.labelSmall?.copyWith(color: colors.textSecondary)),
+                            ),
                     ),
-                    const SizedBox(width: 4),
-                    Text(
-                      '${pctChange.abs()}%',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w900,
-                        color: isPositive ? AppColors.success : AppColors.error,
+                    const SizedBox(height: 2),
+                    Container(
+                      height: _barArea,
+                      decoration: BoxDecoration(
+                        color: colors.chartTrack,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      alignment: Alignment.bottomCenter,
+                      clipBehavior: Clip.antiAlias,
+                      child: b.isFuture || b.counts.focusSeconds == 0
+                          ? null
+                          : Container(
+                              height: _barArea * b.counts.focusSeconds / maxValue,
+                              color: b.isCurrent ? colors.chartPrimary : colors.chartPrimary.withValues(alpha: 0.55),
+                            ),
+                    ),
+                    const SizedBox(height: 6),
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        b.label,
+                        maxLines: 1,
+                        style: context.text.labelSmall?.copyWith(
+                          color: b.isFuture
+                              ? colors.textDisabled
+                              : b.isCurrent
+                                  ? colors.textPrimary
+                                  : colors.textSecondary,
+                          fontWeight: b.isCurrent ? FontWeight.w800 : FontWeight.w500,
+                        ),
                       ),
                     ),
                   ],
                 ),
               ),
-            ],
-          ),
-          const SizedBox(height: 18),
-          Row(
-            children: [
-              // Current Period
-              Expanded(
-                child: Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: accentColor.withValues(alpha: 0.08),
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: accentColor.withValues(alpha: 0.2)),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(period1Label, style: TextStyle(color: accentColor, fontWeight: FontWeight.w700, fontSize: 12)),
-                      const SizedBox(height: 4),
-                      Text(period1Value, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
-                      const SizedBox(height: 2),
-                      Text(period1Extra, style: theme.textTheme.bodySmall?.copyWith(fontSize: 11)),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-
-              // Prior Period
-              Expanded(
-                child: Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.surface,
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: theme.dividerColor.withValues(alpha: 0.2)),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(period2Label,
-                          style: TextStyle(
-                              color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
-                              fontWeight: FontWeight.w700,
-                              fontSize: 12)),
-                      const SizedBox(height: 4),
-                      Text(period2Value, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
-                      const SizedBox(height: 2),
-                      Text(period2Extra, style: theme.textTheme.bodySmall?.copyWith(fontSize: 11)),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
+            ),
         ],
       ),
     );
   }
+}
 
-  Widget _buildSectionHeader(ThemeData theme, String title, IconData icon, Color color) {
-    return Row(
-      children: [
-        Icon(icon, color: color, size: 18),
-        const SizedBox(width: 8),
-        Text(
-          title,
-          style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+class _ComparisonCard extends StatelessWidget {
+  final PeriodReport report;
+  final String previousLabel;
+  const _ComparisonCard({required this.report, required this.previousLabel});
+
+  String _change(int seconds) {
+    if (seconds.abs() < 60) return 'Same';
+    return '${seconds > 0 ? '+' : '-'}${formatFocus(seconds.abs())}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final cur = report.current;
+    final prev = report.previous;
+    final daily = report.period == AnalyticsPeriod.daily;
+
+    final rows = <Widget>[
+      _CompareRow(
+        label: 'Focus time',
+        previous: formatFocus(prev.focusSeconds),
+        current: formatFocus(cur.focusSeconds),
+        change: report.focusChange,
+        changeText: _change(report.focusChange),
+      ),
+      if (!daily)
+        _CompareRow(
+          label: 'Daily average',
+          previous: formatFocus(report.previousDailyAverageFocus),
+          current: formatFocus(report.dailyAverageFocus),
+          change: report.dailyAverageFocus - report.previousDailyAverageFocus,
+          changeText: _change(report.dailyAverageFocus - report.previousDailyAverageFocus),
         ),
-      ],
-    );
-  }
+      _CompareRow(
+        label: 'Sessions',
+        previous: '${prev.sessionCount}',
+        current: '${cur.sessionCount}',
+        change: cur.sessionCount - prev.sessionCount,
+        changeText: cur.sessionCount == prev.sessionCount
+            ? 'Same'
+            : '${cur.sessionCount > prev.sessionCount ? '+' : ''}${cur.sessionCount - prev.sessionCount}',
+      ),
+      _CompareRow(
+        label: 'Longest session',
+        previous: formatFocus(prev.longestSessionSeconds),
+        current: formatFocus(cur.longestSessionSeconds),
+        change: cur.longestSessionSeconds - prev.longestSessionSeconds,
+        changeText: _change(cur.longestSessionSeconds - prev.longestSessionSeconds),
+      ),
+    ];
 
-  Widget _buildEmptyText(String msg) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Text(
-        msg,
-        style: TextStyle(fontSize: 13, color: Colors.grey.withValues(alpha: 0.8), fontStyle: FontStyle.italic),
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Time compared with $previousLabel',
+                style: context.text.titleSmall?.copyWith(color: colors.textPrimary, fontWeight: FontWeight.w700)),
+            if (report.comparedDays != null) ...[
+              const SizedBox(height: 2),
+              Text(
+                'First ${report.comparedDays} ${report.comparedDays == 1 ? 'day' : 'days'} of each period, so far',
+                style: context.text.bodySmall?.copyWith(color: colors.textSecondary),
+              ),
+            ],
+            const SizedBox(height: 4),
+            for (var i = 0; i < rows.length; i++) ...[
+              if (i > 0) Divider(height: 1, color: colors.divider),
+              rows[i],
+            ],
+          ],
+        ),
       ),
     );
   }
+}
 
-  Widget _buildTaskItem(ThemeData theme, Todo task, {required bool isDone}) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: theme.cardTheme.color ?? theme.colorScheme.surface,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: theme.dividerColor.withValues(alpha: 0.2)),
-      ),
-      child: Row(
-        children: [
-          Icon(
-            isDone ? Icons.check_circle_rounded : Icons.radio_button_unchecked_rounded,
-            color: isDone ? AppColors.success : AppColors.warning,
-            size: 20,
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+/// Timer sessions saved for the selected day, with their real start and end.
+class _SessionsCard extends StatelessWidget {
+  final List<TaskSession> sessions;
+  const _SessionsCard({required this.sessions});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final total = sessions.fold<int>(0, (sum, s) => sum + s.durationSeconds);
+    final time = DateFormat.jm();
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
               children: [
-                Text(
-                  task.title,
-                  style: TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 14,
-                    decoration: isDone ? TextDecoration.lineThrough : null,
-                  ),
+                Expanded(
+                  child: Text('Timer sessions',
+                      style: context.text.titleSmall?.copyWith(color: colors.textPrimary, fontWeight: FontWeight.w700)),
                 ),
-                if (task.category.isNotEmpty)
-                  Text(
-                    task.category,
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.primary.withValues(alpha: 0.8),
-                    ),
-                  ),
+                if (sessions.isNotEmpty)
+                  Text('Total ${formatFocus(total)}',
+                      style: context.text.labelMedium?.copyWith(color: colors.textSecondary, fontWeight: FontWeight.w700)),
               ],
             ),
-          ),
-          if (task.timeSpentSeconds > 0)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
-                color: AppColors.tasks.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.timer_outlined, size: 12, color: AppColors.tasks),
-                  const SizedBox(width: 4),
-                  Text(
-                    _formatDuration(task.timeSpentSeconds),
-                    style: const TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w800,
-                      color: AppColors.tasks,
-                    ),
+            if (sessions.isEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                child: Text('No timer sessions on this day.',
+                    style: context.text.bodyMedium?.copyWith(color: colors.textSecondary)),
+              )
+            else
+              for (var i = 0; i < sessions.length; i++) ...[
+                if (i > 0) Divider(height: 1, color: colors.divider),
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(sessions[i].taskTitle,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: context.text.bodyMedium
+                                    ?.copyWith(color: colors.textPrimary, fontWeight: FontWeight.w600)),
+                            const SizedBox(height: 2),
+                            Text(
+                              '${time.format(sessions[i].startTime)} – ${time.format(sessions[i].endTime)}',
+                              style: context.text.bodySmall?.copyWith(color: colors.textSecondary),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Text(formatFocus(sessions[i].durationSeconds),
+                          style: context.text.bodyMedium?.copyWith(color: colors.textPrimary, fontWeight: FontWeight.w700)),
+                    ],
                   ),
-                ],
+                ),
+              ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CompareRow extends StatelessWidget {
+  final String label;
+  final String previous;
+  final String current;
+
+  /// Positive = better than before, negative = worse.
+  final int change;
+  final String? changeText;
+
+  const _CompareRow({
+    required this.label,
+    required this.previous,
+    required this.current,
+    required this.change,
+    required this.changeText,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final tone = change > 0 ? colors.success : (change < 0 ? colors.error : colors.textSecondary);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: context.text.bodyMedium?.copyWith(color: colors.textSecondary)),
+          ),
+          Text(previous, style: context.text.bodyMedium?.copyWith(color: colors.textSecondary)),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            child: Icon(Icons.arrow_forward_rounded, size: 14, color: colors.textDisabled),
+          ),
+          Text(current,
+              style: context.text.bodyMedium?.copyWith(color: colors.textPrimary, fontWeight: FontWeight.w700)),
+          if (changeText != null)
+            Container(
+              width: 64,
+              alignment: Alignment.centerRight,
+              child: Text(
+                changeText!,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: context.text.labelMedium?.copyWith(color: tone, fontWeight: FontWeight.w700),
               ),
-            ),
+            )
+          else
+            const SizedBox(width: 64),
         ],
+      ),
+    );
+  }
+}
+
+class _EmptyPeriod extends StatelessWidget {
+  final AnalyticsPeriod period;
+  const _EmptyPeriod({required this.period});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final what = {
+      AnalyticsPeriod.daily: 'this day',
+      AnalyticsPeriod.weekly: 'this week',
+      AnalyticsPeriod.monthly: 'this month',
+      AnalyticsPeriod.yearly: 'this year',
+    }[period]!;
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
+        child: Column(
+          children: [
+            Icon(Icons.insights_rounded, size: 40, color: colors.textDisabled),
+            const SizedBox(height: 12),
+            Text('No activity for $what',
+                textAlign: TextAlign.center,
+                style: context.text.titleSmall?.copyWith(color: colors.textPrimary, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 4),
+            Text('Timer sessions and tasks will show up here.',
+                textAlign: TextAlign.center, style: context.text.bodySmall?.copyWith(color: colors.textSecondary)),
+          ],
+        ),
       ),
     );
   }

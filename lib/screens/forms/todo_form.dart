@@ -114,6 +114,7 @@ class _TodoFormState extends State<TodoForm> {
       timeSpentSeconds: widget.initial?.timeSpentSeconds ?? 0,
       targetMinutes: widget.initial?.targetMinutes ?? 0,
       completed: widget.initial?.completed ?? false,
+      completedAt: widget.initial?.completedAt,
       type: finalType,
       createdAt: widget.initial?.createdAt ?? DateTime.now(),
     );

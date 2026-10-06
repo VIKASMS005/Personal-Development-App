@@ -1,6 +1,53 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import '../theme/app_colors_ext.dart';
 import 'app_colors.dart';
+
+// Semantic colors for widgets that read `context.colors`, matched to this
+// theme's palette so they follow light/dark mode.
+const _lightColors = AppColorsExt(
+  textPrimary: AppColors.lightText,
+  textSecondary: Color(0xFF64748B),
+  textDisabled: Color(0xFF94A3B8),
+  border: Color(0xFFE2E8F0),
+  divider: Color(0xFFF1F5F9),
+  surfaceMuted: AppColors.lightCardHover,
+  surfaceStrong: Color(0xFFE2E8F0),
+  success: AppColors.primary,
+  successContainer: Color(0xFFD1FAE5),
+  warning: Color(0xFFD97706),
+  warningContainer: Color(0xFFFEF3C7),
+  error: Color(0xFFDC2626),
+  errorContainer: Color(0xFFFEE2E2),
+  info: AppColors.tasks,
+  infoContainer: Color(0xFFDBEAFE),
+  chartPrimary: AppColors.primary,
+  chartSecondary: AppColors.secondary,
+  chartMuted: Color(0xFFCBD5E1),
+  chartTrack: Color(0xFFF1F5F9),
+);
+
+const _darkColors = AppColorsExt(
+  textPrimary: AppColors.darkText,
+  textSecondary: Color(0xFF94A3B8),
+  textDisabled: Color(0xFF64748B),
+  border: Color(0xFF334155),
+  divider: Color(0xFF273449),
+  surfaceMuted: Color(0xFF172036),
+  surfaceStrong: AppColors.darkCardHover,
+  success: AppColors.primaryAccent,
+  successContainer: Color(0xFF113B33),
+  warning: Color(0xFFFBBF24),
+  warningContainer: Color(0xFF3A2E12),
+  error: Color(0xFFF87171),
+  errorContainer: Color(0xFF3B1C24),
+  info: Color(0xFF60A5FA),
+  infoContainer: Color(0xFF172554),
+  chartPrimary: AppColors.primaryAccent,
+  chartSecondary: AppColors.secondaryLight,
+  chartMuted: Color(0xFF475569),
+  chartTrack: Color(0xFF273449),
+);
 
 class AppTheme {
   static TextTheme _textTheme(Brightness brightness) {
@@ -95,6 +142,7 @@ class AppTheme {
     return ThemeData(
       useMaterial3: true,
       brightness: Brightness.light,
+      extensions: const [_lightColors],
       colorScheme: scheme,
       scaffoldBackgroundColor: AppColors.lightBg,
       textTheme: _textTheme(Brightness.light),
@@ -200,6 +248,7 @@ class AppTheme {
     return ThemeData(
       useMaterial3: true,
       brightness: Brightness.dark,
+      extensions: const [_darkColors],
       colorScheme: scheme,
       scaffoldBackgroundColor: AppColors.darkBg,
       textTheme: _textTheme(Brightness.dark),

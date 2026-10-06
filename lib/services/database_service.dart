@@ -76,9 +76,22 @@ class DatabaseService {
             category TEXT,
             duration_seconds INTEGER DEFAULT 0,
             date TEXT,
+            start_time TEXT,
+            end_time TEXT,
+            status TEXT DEFAULT 'completed',
             timestamp TEXT
           )
         ''');
+        // Each timer session keeps its own start/end and status.
+        for (final col in [
+          'start_time TEXT',
+          'end_time TEXT',
+          "status TEXT DEFAULT 'completed'",
+        ]) {
+          try {
+            await db.execute('ALTER TABLE task_sessions ADD COLUMN $col');
+          } catch (_) {}
+        }
         // Ensure reminder_date_time, time_spent_seconds, category, target_minutes, type, created_at exist on todos
         try {
           await db
@@ -106,6 +119,15 @@ class DatabaseService {
         try {
           await db.execute(
               'ALTER TABLE todos ADD COLUMN classification_locked INTEGER DEFAULT 0');
+        } catch (_) {}
+        try {
+          await db.execute('ALTER TABLE todos ADD COLUMN completed_at TEXT');
+        } catch (_) {}
+        // Completed items saved before completed_at existed: their last update
+        // is the best record of when they were completed.
+        try {
+          await db.execute(
+              'UPDATE todos SET completed_at = updated_at WHERE completed = 1 AND completed_at IS NULL');
         } catch (_) {}
         // Backfill created_at from updated_at for pre-existing records where created_at is NULL
         try {
@@ -223,6 +245,7 @@ class DatabaseService {
         time_spent_seconds INTEGER DEFAULT 0,
         target_minutes INTEGER DEFAULT 0,
         completed INTEGER DEFAULT 0,
+        completed_at TEXT,
         type TEXT DEFAULT 'task',
         classification_locked INTEGER DEFAULT 1,
         created_at TEXT,
@@ -1183,6 +1206,7 @@ class DatabaseService {
         'time_spent_seconds',
         'target_minutes',
         'completed',
+        'completed_at',
         'type',
         'created_at',
         'classification_locked',
@@ -1275,6 +1299,9 @@ class DatabaseService {
         'category',
         'duration_seconds',
         'date',
+        'start_time',
+        'end_time',
+        'status',
         'timestamp'
       },
       'step_records': {

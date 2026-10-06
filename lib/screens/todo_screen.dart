@@ -635,8 +635,8 @@ class _TodosScreenState extends State<TodosScreen>
                                                       ),
                                                     ),
 
-                                                    // Tracked Time Tag
-                                                    if (t.timeSpentSeconds > 0)
+                                                    // Tracked Time Tag (tasks only; goals are not timed)
+                                                    if (t.isTask && t.timeSpentSeconds > 0)
                                                       Container(
                                                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                                                         decoration: BoxDecoration(
@@ -661,6 +661,11 @@ class _TodosScreenState extends State<TodosScreen>
                                                       ),
                                                   ],
                                                 ),
+                                                // Deadline timeline (Goals only)
+                                                if (t.isGoal && t.dueDate != null) ...[
+                                                  const SizedBox(height: 10),
+                                                  _GoalTimeline(goal: t),
+                                                ],
                                                 const SizedBox(height: 6),
 
                                                 // Due Date & Time
@@ -696,6 +701,7 @@ class _TodosScreenState extends State<TodosScreen>
                                                   }
                                                 },
                                               ),
+                                              if (t.isTask) ...[
                                               const SizedBox(height: 8),
                                               Consumer<TaskTrackerProvider>(
                                                 builder: (context, tracker, _) {
@@ -718,6 +724,7 @@ class _TodosScreenState extends State<TodosScreen>
                                                   );
                                                 },
                                               ),
+                                              ],
                                             ],
                                           ),
                                         ],
@@ -735,6 +742,84 @@ class _TodosScreenState extends State<TodosScreen>
           ),
         ],
       ),
+    );
+  }
+}
+
+/// How much of a goal's window (creation → deadline) has passed, with a
+/// "days left" label, so long-horizon goals show where they stand.
+class _GoalTimeline extends StatelessWidget {
+  final Todo goal;
+  const _GoalTimeline({required this.goal});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final g = goal;
+    final due = g.dueDate!;
+    final now = DateTime.now();
+
+    final start = g.createdAt ?? g.updatedAt;
+    final total = due.difference(start).inMinutes;
+    final passed = now.difference(start).inMinutes;
+    final elapsed = g.completed
+        ? 1.0
+        : total <= 0
+            ? 1.0
+            : (passed / total).clamp(0.0, 1.0);
+
+    final days = DateTime(due.year, due.month, due.day)
+        .difference(DateTime(now.year, now.month, now.day))
+        .inDays;
+    final String timeLeft;
+    if (g.completed) {
+      timeLeft = 'Done';
+    } else if (days > 1) {
+      timeLeft = '$days days left';
+    } else if (days == 1) {
+      timeLeft = '1 day left';
+    } else if (days == 0) {
+      timeLeft = 'Due today';
+    } else {
+      timeLeft = '${-days} ${-days == 1 ? 'day' : 'days'} overdue';
+    }
+
+    // Green until 25% or less of the goal's time remains (or it's overdue).
+    final color = !g.completed && (g.isMissed || elapsed >= 0.75)
+        ? AppColors.error
+        : AppColors.success;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                'Timeline',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                ),
+              ),
+            ),
+            Text(
+              timeLeft,
+              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: color),
+            ),
+          ],
+        ),
+        const SizedBox(height: 5),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: LinearProgressIndicator(
+            value: elapsed,
+            minHeight: 6,
+            color: color,
+            backgroundColor: color.withValues(alpha: 0.15),
+          ),
+        ),
+      ],
     );
   }
 }

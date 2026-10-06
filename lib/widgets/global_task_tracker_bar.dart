@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import '../providers/task_tracker_provider.dart';
-import '../utils/app_colors.dart';
+import '../theme/theme_context.dart';
 
 /// Floating mini-tracker bar that stays visible across all app screens
 /// while a task timer is actively running.
@@ -17,170 +17,89 @@ class GlobalTaskTrackerBar extends StatelessWidget {
       return const SizedBox.shrink();
     }
 
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
+    final colors = context.colors;
+    final scheme = context.scheme;
     final todo = tracker.activeTodo!;
+    final paused = tracker.isPaused;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-        decoration: BoxDecoration(
-          color: isDark ? const Color(0xFF1E293B) : Colors.white,
+      child: Material(
+        color: Theme.of(context).cardTheme.color ?? scheme.surface,
+        shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: AppColors.tasks.withValues(alpha: 0.4),
-            width: 1.5,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: AppColors.tasks.withValues(alpha: 0.25),
-              blurRadius: 16,
-              offset: const Offset(0, 4),
-            ),
-          ],
+          side: BorderSide(color: colors.border),
         ),
-        child: Row(
-          children: [
-            // Glowing Task Indicator
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: AppColors.tasks.withValues(alpha: 0.15),
-                shape: BoxShape.circle,
+        clipBehavior: Clip.antiAlias,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 8, 6, 8),
+          child: Row(
+            children: [
+              Icon(
+                paused ? Icons.pause_circle_rounded : Icons.timer_rounded,
+                color: paused ? colors.warning : scheme.primary,
+                size: 22,
               ),
-              child: const Icon(
-                Icons.timer_rounded,
-                color: AppColors.tasks,
-                size: 18,
-              ),
-            ),
-            const SizedBox(width: 10),
-
-            // Task Name and Category
-            Expanded(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    todo.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w700,
-                      fontSize: 13,
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      todo.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: context.text.bodyMedium?.copyWith(
+                        color: colors.textPrimary,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 2),
-                  Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                        decoration: BoxDecoration(
-                          color: AppColors.tasks.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          todo.category,
-                          style: const TextStyle(
-                            fontSize: 9,
-                            fontWeight: FontWeight.w600,
-                            color: AppColors.tasks,
-                          ),
-                        ),
+                    Text(
+                      paused ? 'Paused' : 'Tracking',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: context.text.labelSmall?.copyWith(
+                        color: paused ? colors.warning : colors.textSecondary,
                       ),
-                      const SizedBox(width: 6),
-                      Text(
-                        tracker.isPaused ? 'Paused' : 'Tracking in background',
-                        style: TextStyle(
-                          fontSize: 10,
-                          color: tracker.isPaused
-                              ? Colors.amber
-                              : theme.colorScheme.onSurface.withValues(alpha: 0.6),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-
-            // Live Timer Display
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(
-                color: isDark ? Colors.black26 : Colors.grey.shade100,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Text(
-                tracker.formattedTime,
-                style: const TextStyle(
-                  fontFamily: 'monospace',
-                  fontWeight: FontWeight.w800,
-                  fontSize: 14,
-                  color: AppColors.tasks,
+                    ),
+                  ],
                 ),
               ),
-            ),
-            const SizedBox(width: 6),
-
-            // Pause / Resume Button
-            IconButton(
-              icon: Icon(
-                tracker.isPaused
-                    ? Icons.play_arrow_rounded
-                    : Icons.pause_rounded,
-                color: AppColors.tasks,
-                size: 22,
+              const SizedBox(width: 8),
+              Text(
+                tracker.formattedTime,
+                style: context.text.titleSmall?.copyWith(
+                  color: colors.textPrimary,
+                  fontWeight: FontWeight.w800,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
               ),
-              onPressed: () => tracker.togglePauseResume(),
-              tooltip: tracker.isPaused ? 'Resume' : 'Pause',
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-            ),
-
-            // Finish & Save Button
-            IconButton(
-              icon: const Icon(
-                Icons.check_circle_rounded,
-                color: AppColors.success,
-                size: 22,
+              IconButton(
+                icon: Icon(paused ? Icons.play_arrow_rounded : Icons.pause_rounded),
+                color: scheme.primary,
+                onPressed: tracker.togglePauseResume,
+                tooltip: paused ? 'Resume' : 'Pause',
               ),
-              onPressed: () async {
-                await tracker.finish(context);
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).clearSnackBars();
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('🎉 Focus session recorded successfully!'),
-                      backgroundColor: AppColors.success,
+              IconButton(
+                icon: const Icon(Icons.stop_rounded),
+                color: colors.error,
+                tooltip: 'End and save',
+                onPressed: () async {
+                  final messenger = ScaffoldMessenger.of(context);
+                  await tracker.finish(context);
+                  messenger
+                    ..clearSnackBars()
+                    ..showSnackBar(const SnackBar(
+                      content: Text('Session saved'),
                       duration: Duration(seconds: 2),
-                      behavior: SnackBarBehavior.floating,
-                    ),
-                  );
-                }
-              },
-              tooltip: 'Finish & Save',
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-            ),
-
-            // Cancel Button
-            IconButton(
-              icon: Icon(
-                Icons.close_rounded,
-                color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
-                size: 18,
+                    ));
+                },
               ),
-              onPressed: () => tracker.cancel(),
-              tooltip: 'Discard Timer',
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
-    ).animate().slideY(begin: 0.2, end: 0, duration: 250.ms).fadeIn();
+    ).animate().fadeIn(duration: 200.ms);
   }
 }

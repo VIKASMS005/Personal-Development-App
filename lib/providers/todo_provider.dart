@@ -4,6 +4,7 @@ import '../models/task_session.dart';
 import '../models/reminder.dart';
 import '../services/database_service.dart';
 import '../services/notification_service.dart';
+import '../services/task_analytics.dart';
 
 class TodoProvider extends ChangeNotifier {
   final DatabaseService _db = DatabaseService.instance;
@@ -182,196 +183,29 @@ class TodoProvider extends ChangeNotifier {
     await _db.softDeleteTodo(id);
   }
 
-  Future<void> logTaskTime(String taskId, int durationSeconds) async {
+  /// Adds freshly saved timer sessions and their time to the task total.
+  Future<void> recordSessions(String taskId, List<TaskSession> newSessions) async {
+    if (newSessions.isEmpty) return;
+    _sessions.insertAll(0, newSessions);
     final idx = _todos.indexWhere((t) => t.id == taskId);
     if (idx != -1) {
-      final task = _todos[idx];
-      final newTime = task.timeSpentSeconds + durationSeconds;
-      final updated = task.copyWith(
-        timeSpentSeconds: newTime,
+      final added = newSessions.fold<int>(0, (sum, s) => sum + s.durationSeconds);
+      _todos[idx] = _todos[idx].copyWith(
+        timeSpentSeconds: _todos[idx].timeSpentSeconds + added,
         updatedAt: DateTime.now(),
       );
-      _todos[idx] = updated;
-
-      final session = TaskSession(
-        uid: task.uid,
-        taskId: task.id,
-        taskTitle: task.title,
-        category: task.category.isNotEmpty ? task.category : 'General',
-        durationSeconds: durationSeconds,
-        timestamp: DateTime.now(),
-      );
-      _sessions.insert(0, session);
-      notifyListeners();
-
-      await _db.upsertTodo(updated);
-      await _db.insertTaskSession(session);
+      await _db.upsertTodo(_todos[idx]);
     }
+    notifyListeners();
   }
 
-  // ==================== DAILY REPORTS & ANALYTICS ====================
-  static String _formatDate(DateTime dt) {
-    return '${dt.year.toString().padLeft(4, '0')}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
-  }
+  // ==================== TASK ANALYTICS & TIMER HISTORY ====================
 
-  Map<String, dynamic> getDailyReport(DateTime date) {
-    final dateStr = _formatDate(date);
-    final daySessions = _sessions.where((s) => s.date == dateStr).toList();
-    final totalFocusSeconds =
-        daySessions.fold<int>(0, (sum, s) => sum + s.durationSeconds);
+  /// Task analytics computed from the stored tasks and sessions.
+  TaskAnalytics analytics({DateTime? now}) =>
+      TaskAnalytics(todos: _todos, sessions: _sessions, now: now);
 
-    // Group focus time by category
-    final Map<String, int> categoryTime = {};
-    for (final s in daySessions) {
-      final cat = s.category.isNotEmpty ? s.category : 'General';
-      categoryTime[cat] = (categoryTime[cat] ?? 0) + s.durationSeconds;
-    }
-
-    // Completed vs Incomplete Tasks
-    final completedTasks = _todos.where((t) {
-      if (!t.completed) return false;
-      final updatedDateStr = _formatDate(t.updatedAt);
-      return updatedDateStr == dateStr ||
-          daySessions.any((s) => s.taskId == t.id);
-    }).toList();
-
-    final pendingTasks = _todos.where((t) => !t.completed).toList();
-
-    final totalRelevant = completedTasks.length + pendingTasks.length;
-    final completionRate = totalRelevant > 0
-        ? ((completedTasks.length / totalRelevant) * 100).round()
-        : 0;
-
-    return {
-      'date': date,
-      'dateStr': dateStr,
-      'totalSeconds': totalFocusSeconds,
-      'totalMinutes': (totalFocusSeconds / 60).round(),
-      'completedTasks': completedTasks,
-      'pendingTasks': pendingTasks,
-      'daySessions': daySessions,
-      'categoryTime': categoryTime,
-      'completionRate': completionRate,
-    };
-  }
-
-  Map<String, dynamic> getImprovementComparison() {
-    final now = DateTime.now();
-    final todayStr = _formatDate(now);
-    final yesterdayStr = _formatDate(now.subtract(const Duration(days: 1)));
-
-    // 1. Day-to-Day (Today vs Yesterday)
-    final todaySeconds = _sessions
-        .where((s) => s.date == todayStr)
-        .fold<int>(0, (sum, s) => sum + s.durationSeconds);
-    final yesterdaySeconds = _sessions
-        .where((s) => s.date == yesterdayStr)
-        .fold<int>(0, (sum, s) => sum + s.durationSeconds);
-
-    final todayCompleted = _todos
-        .where((t) => t.completed && _formatDate(t.updatedAt) == todayStr)
-        .length;
-    final yesterdayCompleted = _todos
-        .where((t) => t.completed && _formatDate(t.updatedAt) == yesterdayStr)
-        .length;
-
-    int dayTimeChangePct = 0;
-    if (yesterdaySeconds > 0) {
-      dayTimeChangePct =
-          (((todaySeconds - yesterdaySeconds) / yesterdaySeconds) * 100)
-              .round();
-    } else if (todaySeconds > 0) {
-      dayTimeChangePct = 100;
-    }
-
-    // 2. Week-to-Week (Past 7 Days vs Prior 7 Days)
-    final past7Days =
-        List.generate(7, (i) => _formatDate(now.subtract(Duration(days: i))));
-    final prior7Days = List.generate(
-        7, (i) => _formatDate(now.subtract(Duration(days: 7 + i))));
-
-    final currentWeekSeconds = _sessions
-        .where((s) => past7Days.contains(s.date))
-        .fold<int>(0, (sum, s) => sum + s.durationSeconds);
-    final priorWeekSeconds = _sessions
-        .where((s) => prior7Days.contains(s.date))
-        .fold<int>(0, (sum, s) => sum + s.durationSeconds);
-
-    final currentWeekCompleted = _todos
-        .where(
-            (t) => t.completed && past7Days.contains(_formatDate(t.updatedAt)))
-        .length;
-    final priorWeekCompleted = _todos
-        .where(
-            (t) => t.completed && prior7Days.contains(_formatDate(t.updatedAt)))
-        .length;
-
-    int weekTimeChangePct = 0;
-    if (priorWeekSeconds > 0) {
-      weekTimeChangePct =
-          (((currentWeekSeconds - priorWeekSeconds) / priorWeekSeconds) * 100)
-              .round();
-    } else if (currentWeekSeconds > 0) {
-      weekTimeChangePct = 100;
-    }
-
-    // 3. Month-to-Month (This Month vs Previous Month)
-    final thisMonthSessions = _sessions.where(
-        (s) => s.timestamp.year == now.year && s.timestamp.month == now.month);
-    final prevMonth = now.month == 1 ? 12 : now.month - 1;
-    final prevMonthYear = now.month == 1 ? now.year - 1 : now.year;
-    final prevMonthSessions = _sessions.where((s) =>
-        s.timestamp.year == prevMonthYear && s.timestamp.month == prevMonth);
-
-    final thisMonthSeconds =
-        thisMonthSessions.fold<int>(0, (sum, s) => sum + s.durationSeconds);
-    final prevMonthSeconds =
-        prevMonthSessions.fold<int>(0, (sum, s) => sum + s.durationSeconds);
-
-    final thisMonthCompleted = _todos
-        .where((t) =>
-            t.completed &&
-            t.updatedAt.year == now.year &&
-            t.updatedAt.month == now.month)
-        .length;
-    final prevMonthCompleted = _todos
-        .where((t) =>
-            t.completed &&
-            t.updatedAt.year == prevMonthYear &&
-            t.updatedAt.month == prevMonth)
-        .length;
-
-    int monthTimeChangePct = 0;
-    if (prevMonthSeconds > 0) {
-      monthTimeChangePct =
-          (((thisMonthSeconds - prevMonthSeconds) / prevMonthSeconds) * 100)
-              .round();
-    } else if (thisMonthSeconds > 0) {
-      monthTimeChangePct = 100;
-    }
-
-    return {
-      // Day-to-Day
-      'todayMinutes': (todaySeconds / 60).round(),
-      'yesterdayMinutes': (yesterdaySeconds / 60).round(),
-      'todayCompleted': todayCompleted,
-      'yesterdayCompleted': yesterdayCompleted,
-      'dayTimeChangePct': dayTimeChangePct,
-
-      // Week-to-Week
-      'currentWeekHours': (currentWeekSeconds / 3600).toStringAsFixed(1),
-      'priorWeekHours': (priorWeekSeconds / 3600).toStringAsFixed(1),
-      'currentWeekDailyAvgMinutes': ((currentWeekSeconds / 60) / 7).round(),
-      'currentWeekCompleted': currentWeekCompleted,
-      'priorWeekCompleted': priorWeekCompleted,
-      'weekTimeChangePct': weekTimeChangePct,
-
-      // Month-to-Month
-      'thisMonthHours': (thisMonthSeconds / 3600).toStringAsFixed(1),
-      'prevMonthHours': (prevMonthSeconds / 3600).toStringAsFixed(1),
-      'thisMonthCompleted': thisMonthCompleted,
-      'prevMonthCompleted': prevMonthCompleted,
-      'monthTimeChangePct': monthTimeChangePct,
-    };
-  }
+  /// Timer sessions that actually happened on [day] (none for future days).
+  List<TaskSession> sessionsOn(DateTime day) =>
+      TaskAnalytics.sessionsOn(_sessions, day);
 }

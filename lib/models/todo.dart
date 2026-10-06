@@ -13,6 +13,9 @@ class Todo {
   int timeSpentSeconds; // Total tracked focus/study time in seconds
   int targetMinutes; // Optional goal duration in minutes
   bool completed;
+
+  /// When the item was marked complete; null while it is not completed.
+  DateTime? completedAt;
   String
       type; // Permanent classification: 'task' (<= 7 days at creation) or 'goal' (> 7 days at creation)
   DateTime? createdAt;
@@ -32,6 +35,7 @@ class Todo {
     this.timeSpentSeconds = 0,
     this.targetMinutes = 0,
     this.completed = false,
+    this.completedAt,
     String? type,
     this.createdAt,
     DateTime? updatedAt,
@@ -104,12 +108,25 @@ class Todo {
     int? timeSpentSeconds,
     int? targetMinutes,
     bool? completed,
+    DateTime? completedAt,
     String? type,
     DateTime? createdAt,
     DateTime? updatedAt,
     bool? isSynced,
     bool? isDeleted,
   }) {
+    // Completing stamps the completion time; un-completing clears it.
+    final nextCompleted = completed ?? this.completed;
+    final DateTime? nextCompletedAt;
+    if (!nextCompleted) {
+      nextCompletedAt = null;
+    } else if (completedAt != null) {
+      nextCompletedAt = completedAt;
+    } else if (this.completed) {
+      nextCompletedAt = this.completedAt;
+    } else {
+      nextCompletedAt = DateTime.now();
+    }
     return Todo(
       id: id ?? this.id,
       uid: uid ?? this.uid,
@@ -121,7 +138,8 @@ class Todo {
       priority: priority ?? this.priority,
       timeSpentSeconds: timeSpentSeconds ?? this.timeSpentSeconds,
       targetMinutes: targetMinutes ?? this.targetMinutes,
-      completed: completed ?? this.completed,
+      completed: nextCompleted,
+      completedAt: nextCompletedAt,
       type: type ?? this.type,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
@@ -142,6 +160,7 @@ class Todo {
         'timeSpentSeconds': timeSpentSeconds,
         'targetMinutes': targetMinutes,
         'completed': completed,
+        'completedAt': completedAt?.toIso8601String(),
         'type': type,
         'classification_locked': 1,
         'createdAt': createdAt?.toIso8601String(),
@@ -161,6 +180,7 @@ class Todo {
         'time_spent_seconds': timeSpentSeconds,
         'target_minutes': targetMinutes,
         'completed': completed ? 1 : 0,
+        'completed_at': completedAt?.toIso8601String(),
         'type': type,
         'classification_locked': 1,
         'created_at': createdAt?.toIso8601String(),
@@ -228,6 +248,9 @@ class Todo {
       completed: (m['completed'] == true ||
           m['completed'] == 1 ||
           m['completed'] == 'true'),
+      completedAt: (m['completedAt'] ?? m['completed_at']) != null
+          ? DateTime.tryParse((m['completedAt'] ?? m['completed_at']).toString())
+          : null,
       type: parsedType,
       createdAt: parsedCreated,
       updatedAt: (m['updatedAt'] ?? m['updated_at']) != null
@@ -293,6 +316,9 @@ class Todo {
           ? (m['target_minutes'] as num).toInt()
           : int.tryParse('${m['target_minutes']}') ?? 0,
       completed: (m['completed'] == 1 || m['completed'] == true),
+      completedAt: m['completed_at'] != null
+          ? DateTime.tryParse(m['completed_at'].toString())
+          : null,
       type: parsedType,
       createdAt: parsedCreated,
       updatedAt: m['updated_at'] != null
