@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../models/screen_time_record.dart';
 import '../services/screen_time_service.dart';
 import '../services/database_service.dart';
+import '../utils/month_weeks.dart';
 
 class ScreenTimeProvider extends ChangeNotifier {
   final ScreenTimeService _service = ScreenTimeService.instance;
@@ -150,12 +151,10 @@ class ScreenTimeProvider extends ChangeNotifier {
       );
       final now = DateTime.now();
 
-      // Current week (Monday to Sunday)
-      final mondayThisWeek = now.subtract(Duration(days: now.weekday - 1));
+      // Current week (weeks stay inside their month: 1–7, 8–14, ...)
+      final thisWeek = monthWeekOf(now);
       final List<DailyScreenTimeSummary> thisWeekList = [];
-      for (int i = 0; i < 7; i++) {
-        final d = DateTime(
-            mondayThisWeek.year, mondayThisWeek.month, mondayThisWeek.day + i);
+      for (final d in thisWeek.days) {
         final dateStr = d.toIso8601String().split('T')[0];
 
         if (d.isAfter(DateTime(now.year, now.month, now.day))) {
@@ -180,12 +179,9 @@ class ScreenTimeProvider extends ChangeNotifier {
       }
       _weeklySummaries = thisWeekList;
 
-      // Previous week (Monday to Sunday of last week)
-      final mondayLastWeek = mondayThisWeek.subtract(const Duration(days: 7));
+      // Previous week
       final List<DailyScreenTimeSummary> lastWeekList = [];
-      for (int i = 0; i < 7; i++) {
-        final d = DateTime(
-            mondayLastWeek.year, mondayLastWeek.month, mondayLastWeek.day + i);
+      for (final d in previousMonthWeek(thisWeek).days) {
         final dateStr = d.toIso8601String().split('T')[0];
         final start = DateTime(d.year, d.month, d.day);
         final end = DateTime(d.year, d.month, d.day, 23, 59, 59);
@@ -205,16 +201,13 @@ class ScreenTimeProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Query 7 days (Monday..Sunday) for any selected week.
+  /// Query every day of the (month-bound) week containing [anyDateInWeek].
   Future<List<DailyScreenTimeSummary>> getWeekDays(
       DateTime anyDateInWeek) async {
     final now = DateTime.now();
-    final monday =
-        anyDateInWeek.subtract(Duration(days: anyDateInWeek.weekday - 1));
     final List<DailyScreenTimeSummary> result = [];
 
-    for (int i = 0; i < 7; i++) {
-      final d = DateTime(monday.year, monday.month, monday.day + i);
+    for (final d in monthWeekOf(anyDateInWeek).days) {
       final dateStr = d.toIso8601String().split('T')[0];
 
       if (d.isAfter(DateTime(now.year, now.month, now.day))) {

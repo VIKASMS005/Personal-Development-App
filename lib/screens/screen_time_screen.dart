@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
+import '../utils/month_weeks.dart';
+import '../utils/app_colors.dart';
 import '../providers/app_providers.dart';
 import '../models/screen_time_record.dart';
 import '../services/screen_time_service.dart';
@@ -290,9 +292,10 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
           ? 'Today (${DateFormat('MMM d, yyyy').format(_selectedDate)})'
           : DateFormat('EEEE, MMM d, yyyy').format(_selectedDate);
     } else if (_selectedPeriod == 1) {
-      // Weekly: Mon - Sun of that week
-      final mon = _selectedDate.subtract(Duration(days: _selectedDate.weekday - 1));
-      final sun = mon.add(const Duration(days: 6));
+      // Weekly: weeks stay inside their month (1–7, 8–14, ...)
+      final week = monthWeekOf(_selectedDate);
+      final mon = week.start;
+      final sun = week.last;
       label = '${DateFormat('MMM d').format(mon)} – ${DateFormat('MMM d, yyyy').format(sun)}';
     } else if (_selectedPeriod == 2) {
       // Monthly
@@ -322,7 +325,7 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
                   _selectedMonth = _selectedDate.month;
                   _selectedYear = _selectedDate.year;
                 } else if (_selectedPeriod == 1) {
-                  _selectedDate = _selectedDate.subtract(const Duration(days: 7));
+                  _selectedDate = previousMonthWeek(monthWeekOf(_selectedDate)).start;
                   _selectedMonth = _selectedDate.month;
                   _selectedYear = _selectedDate.year;
                 } else if (_selectedPeriod == 2) {
@@ -369,9 +372,9 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
                     _selectedDate = now;
                   }
                 } else if (_selectedPeriod == 1) {
-                  final nextWeek = _selectedDate.add(const Duration(days: 7));
-                  if (!nextWeek.isAfter(now)) {
-                    _selectedDate = nextWeek;
+                  final nextWeek = nextMonthWeek(monthWeekOf(_selectedDate), now);
+                  if (nextWeek != null) {
+                    _selectedDate = nextWeek.contains(DateTime(now.year, now.month, now.day)) ? now : nextWeek.start;
                     _selectedMonth = _selectedDate.month;
                     _selectedYear = _selectedDate.year;
                   }
@@ -681,13 +684,16 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
 
     final weekDays = _weekSummaries;
     final totalWeek = _weekTotal;
-    final avgPerDay = weekDays.isNotEmpty ? (totalWeek.inSeconds / 7).round() : 0;
+    final today = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
+    final elapsedDays = weekDays.where((d) => !(DateTime.tryParse(d.date)?.isAfter(today) ?? false)).length;
+    final avgPerDay = elapsedDays > 0 ? (totalWeek.inSeconds / elapsedDays).round() : 0;
 
     final allSecs = weekDays.map((s) => s.totalDuration.inSeconds.toDouble()).toList();
     final maxSec = allSecs.isEmpty ? 7200.0 : allSecs.reduce((a, b) => a > b ? a : b);
     final safeMax = maxSec > 7200.0 ? maxSec : 7200.0;
 
     const dayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    final weekDates = monthWeekOf(_selectedDate).days;
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 80),
@@ -731,7 +737,7 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
                   children: [
                     Text('Active Days', style: TextStyle(color: theme.colorScheme.onSurface.withValues(alpha: 0.6), fontSize: 11, fontWeight: FontWeight.w600)),
                     const SizedBox(height: 4),
-                    Text('${weekDays.where((d) => d.totalDuration.inSeconds > 0).length} / 7', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900)),
+                    Text('${weekDays.where((d) => d.totalDuration.inSeconds > 0).length} / ${weekDates.length}', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900)),
                     const SizedBox(height: 2),
                     Text('Logged screen days', style: TextStyle(color: theme.colorScheme.onSurface.withValues(alpha: 0.5), fontSize: 11)),
                   ],
@@ -751,7 +757,7 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Daily Comparison (Mon – Sun)', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
+              const Text('Daily Comparison', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
               const SizedBox(height: 4),
               Text('Compare screen time for everyday of this week', style: TextStyle(fontSize: 11, color: theme.colorScheme.onSurface.withValues(alpha: 0.5))),
               const SizedBox(height: 22),
@@ -759,11 +765,11 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
                 height: 190,
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.end,
-                  children: List.generate(7, (i) {
+                  children: List.generate(weekDates.length, (i) {
                     final summary = i < weekDays.length ? weekDays[i] : null;
                     final sec = summary?.totalDuration.inSeconds.toDouble() ?? 0.0;
                     final heightFactor = (sec / safeMax).clamp(0.02, 1.0);
-                    final dayLabel = dayLabels[i];
+                    final dayLabel = '${dayLabels[weekDates[i].weekday - 1]}\n${weekDates[i].day}';
                     final hasUsage = sec > 0;
 
                     return Expanded(
@@ -772,7 +778,7 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
                         children: [
                           Text(
                             hasUsage ? _formatDuration(Duration(seconds: sec.round())) : '',
-                            style: const TextStyle(fontSize: 8, fontWeight: FontWeight.w800, color: Color(0xFF6366F1)),
+                            style: const TextStyle(fontSize: 8, fontWeight: FontWeight.w800, color: AppColors.primary),
                             overflow: TextOverflow.ellipsis,
                           ),
                           const SizedBox(height: 6),
@@ -782,7 +788,7 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
                             decoration: BoxDecoration(
                               gradient: hasUsage
                                   ? const LinearGradient(
-                                      colors: [Color(0xFF818CF8), Color(0xFF6366F1)],
+                                      colors: [AppColors.primaryLight, AppColors.primary],
                                       begin: Alignment.topCenter,
                                       end: Alignment.bottomCenter,
                                     )
@@ -794,6 +800,7 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
                           const SizedBox(height: 8),
                           Text(
                             dayLabel,
+                            textAlign: TextAlign.center,
                             style: TextStyle(
                               fontSize: 11,
                               fontWeight: FontWeight.w700,
@@ -920,7 +927,7 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
                         children: [
                           Text(
                             hasUsage ? _formatDuration(w.totalDuration) : '',
-                            style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: Color(0xFF8B5CF6)),
+                            style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: AppColors.primary),
                             overflow: TextOverflow.ellipsis,
                           ),
                           const SizedBox(height: 6),
@@ -930,7 +937,7 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
                             decoration: BoxDecoration(
                               gradient: hasUsage
                                   ? const LinearGradient(
-                                      colors: [Color(0xFFA78BFA), Color(0xFF8B5CF6)],
+                                      colors: [AppColors.primaryLight, AppColors.primary],
                                       begin: Alignment.topCenter,
                                       end: Alignment.bottomCenter,
                                     )
@@ -1068,7 +1075,7 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
                         children: [
                           Text(
                             hasUsage ? '${m.totalDuration.inHours}h' : '',
-                            style: const TextStyle(fontSize: 8, fontWeight: FontWeight.w800, color: Color(0xFF6366F1)),
+                            style: const TextStyle(fontSize: 8, fontWeight: FontWeight.w800, color: AppColors.primary),
                             overflow: TextOverflow.ellipsis,
                           ),
                           const SizedBox(height: 4),
@@ -1078,7 +1085,7 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
                             decoration: BoxDecoration(
                               gradient: hasUsage
                                   ? const LinearGradient(
-                                      colors: [Color(0xFF818CF8), Color(0xFF4F46E5)],
+                                      colors: [AppColors.primaryLight, AppColors.primary],
                                       begin: Alignment.topCenter,
                                       end: Alignment.bottomCenter,
                                     )

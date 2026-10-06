@@ -72,13 +72,23 @@ class _TaskReportScreenState extends State<TaskReportScreen> {
                 _EmptyPeriod(period: _period)
               else ...[
                 _SummaryCard(report: report, previousLabel: _previousLabel()),
-                const SizedBox(height: 12),
-                _ChartCard(report: report),
-                const SizedBox(height: 12),
-                _ComparisonCard(report: report, previousLabel: _previousLabel()),
+                // Daily shows just that day's time; the other periods get a chart.
+                if (_period != AnalyticsPeriod.daily) ...[
+                  const SizedBox(height: 12),
+                  _ChartCard(report: report),
+                ],
+                // Yearly shows this year's time only, without a comparison.
+                if (_period != AnalyticsPeriod.yearly) ...[
+                  const SizedBox(height: 12),
+                  _ComparisonCard(report: report, previousLabel: _previousLabel()),
+                ],
                 if (_period == AnalyticsPeriod.daily) ...[
                   const SizedBox(height: 12),
                   _SessionsCard(sessions: todoProv.sessionsOn(_anchor)),
+                ],
+                if (_period == AnalyticsPeriod.yearly) ...[
+                  const SizedBox(height: 12),
+                  _TopTasksCard(tasks: todoProv.analytics().topTasksByTime(report.range)),
                 ],
               ],
             ],
@@ -163,9 +173,10 @@ class _SummaryCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = report.current;
     final colors = context.colors;
+    final compare = report.period != AnalyticsPeriod.yearly;
     final diff = report.focusChange;
-    final up = diff >= 60;
-    final down = diff <= -60;
+    final up = compare && diff >= 60;
+    final down = compare && diff <= -60;
 
     return Card(
       margin: EdgeInsets.zero,
@@ -214,7 +225,9 @@ class _SummaryCard extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              insightFor(report, previousLabel),
+              compare
+                  ? insightFor(report, previousLabel)
+                  : '${c.sessionCount} ${c.sessionCount == 1 ? 'session' : 'sessions'} in ${report.range.start.year}',
               style: context.text.bodyMedium?.copyWith(color: colors.textSecondary),
             ),
             const SizedBox(height: 16),
@@ -374,7 +387,7 @@ class _BarChart extends StatelessWidget {
                           ? null
                           : Container(
                               height: _barArea * b.counts.focusSeconds / maxValue,
-                              color: b.isCurrent ? colors.chartPrimary : colors.chartPrimary.withValues(alpha: 0.55),
+                              color: colors.chartPrimary,
                             ),
                     ),
                     const SizedBox(height: 6),
@@ -382,7 +395,8 @@ class _BarChart extends StatelessWidget {
                       fit: BoxFit.scaleDown,
                       child: Text(
                         b.label,
-                        maxLines: 1,
+                        maxLines: 2,
+                        textAlign: TextAlign.center,
                         style: context.text.labelSmall?.copyWith(
                           color: b.isFuture
                               ? colors.textDisabled
@@ -475,6 +489,84 @@ class _ComparisonCard extends StatelessWidget {
               if (i > 0) Divider(height: 1, color: colors.divider),
               rows[i],
             ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The tasks with the most timed focus in the period.
+class _TopTasksCard extends StatelessWidget {
+  final List<TaskTime> tasks;
+  const _TopTasksCard({required this.tasks});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final maxSeconds = tasks.isEmpty ? 1 : tasks.first.seconds;
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Top 10 tasks by time',
+                style: context.text.titleSmall?.copyWith(color: colors.textPrimary, fontWeight: FontWeight.w700)),
+            if (tasks.isEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                child: Text('No timed tasks this year.',
+                    style: context.text.bodyMedium?.copyWith(color: colors.textSecondary)),
+              )
+            else
+              for (var i = 0; i < tasks.length; i++)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: 24,
+                        child: Text('${i + 1}',
+                            style: context.text.labelMedium
+                                ?.copyWith(color: colors.textSecondary, fontWeight: FontWeight.w700)),
+                      ),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(tasks[i].title,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: context.text.bodyMedium
+                                          ?.copyWith(color: colors.textPrimary, fontWeight: FontWeight.w600)),
+                                ),
+                                const SizedBox(width: 12),
+                                Text(formatFocus(tasks[i].seconds),
+                                    style: context.text.bodyMedium
+                                        ?.copyWith(color: colors.textPrimary, fontWeight: FontWeight.w700)),
+                              ],
+                            ),
+                            const SizedBox(height: 6),
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(3),
+                              child: LinearProgressIndicator(
+                                value: tasks[i].seconds / maxSeconds,
+                                minHeight: 5,
+                                color: colors.chartPrimary,
+                                backgroundColor: colors.chartTrack,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
           ],
         ),
       ),

@@ -9,7 +9,7 @@ class Todo {
       category; // 'Study', 'Work', 'Workout', 'Coding', 'Reading', 'Personal', 'General', 'Other'
   DateTime? dueDate;
   DateTime? reminderDateTime;
-  int priority; // 1..4 (1=Urgent&Important, 2=Important, 3=Urgent, 4=Low)
+  int priority; // 1..4 (1=Urgent, 2=Important, 3=Medium, 4=Low)
   int timeSpentSeconds; // Total tracked focus/study time in seconds
   int targetMinutes; // Optional goal duration in minutes
   bool completed;

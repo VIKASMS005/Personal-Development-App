@@ -12,11 +12,11 @@ class PriorityStyle {
 
   const PriorityStyle._(this.level, this.label, this.shortLabel, this.icon, this.tone);
 
-  static const urgentImportant = PriorityStyle._(
-      1, 'Urgent & Important', 'Urgent & important', Icons.keyboard_double_arrow_up_rounded, StatusTone.error);
+  static const urgentImportant =
+      PriorityStyle._(1, 'Urgent', 'Urgent', Icons.keyboard_double_arrow_up_rounded, StatusTone.error);
   static const important =
       PriorityStyle._(2, 'Important', 'Important', Icons.keyboard_arrow_up_rounded, StatusTone.warning);
-  static const urgent = PriorityStyle._(3, 'Urgent', 'Urgent', Icons.bolt_rounded, StatusTone.info);
+  static const urgent = PriorityStyle._(3, 'Medium Priority', 'Medium', Icons.remove_rounded, StatusTone.info);
   static const low =
       PriorityStyle._(4, 'Low Priority', 'Low', Icons.keyboard_arrow_down_rounded, StatusTone.neutral);
 

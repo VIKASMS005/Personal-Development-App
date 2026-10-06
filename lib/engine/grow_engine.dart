@@ -172,7 +172,7 @@ class GrowEngine {
       buffer.writeln('  • Overdue: ${_taskEngine.overdueCount}');
     }
     if (_taskEngine.urgentImportantTasks.isNotEmpty) {
-      buffer.writeln('  • High Priority (Urgent & Important):');
+      buffer.writeln('  • High Priority (Urgent):');
       for (final t in _taskEngine.urgentImportantTasks.take(5)) {
         buffer.writeln('    - ${t.title}');
       }

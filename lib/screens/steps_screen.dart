@@ -6,6 +6,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 import '../providers/app_providers.dart';
 import '../models/step_record.dart';
 import '../utils/app_colors.dart';
+import '../utils/month_weeks.dart';
 
 class StepsScreen extends StatefulWidget {
   const StepsScreen({super.key});
@@ -288,19 +289,17 @@ class _StepsScreenState extends State<StepsScreen> {
     final today = _normalizeDate(DateTime.now());
     final selectedDay = _normalizeDate(_selectedDate);
 
-    final monday = DateTime(
-      _selectedWeekDate.year,
-      _selectedWeekDate.month,
-      _selectedWeekDate.day - (_selectedWeekDate.weekday - 1),
-    );
-    final sunday = DateTime(monday.year, monday.month, monday.day + 6);
-    final isCurrentWeek = !today.isBefore(monday) && !today.isAfter(sunday);
+    // Weeks stay inside their month (1–7, 8–14, ...); see month_weeks.dart.
+    final week = monthWeekOf(_selectedWeekDate);
+    final monday = week.start;
+    final sunday = week.last;
+    final isCurrentWeek = week.contains(today);
 
     bool canGoNext = false;
     if (_selectedPeriod == 0) {
       canGoNext = selectedDay.isBefore(today);
     } else if (_selectedPeriod == 1) {
-      canGoNext = !isCurrentWeek && sunday.isBefore(today);
+      canGoNext = nextMonthWeek(week, today) != null;
     } else if (_selectedPeriod == 2) {
       canGoNext = (_selectedYear < today.year) ||
           (_selectedYear == today.year && _selectedMonth < today.month);
@@ -345,7 +344,7 @@ class _StepsScreenState extends State<StepsScreen> {
                   _selectedMonth = _selectedDate.month;
                   _selectedYear = _selectedDate.year;
                 } else if (_selectedPeriod == 1) {
-                  _selectedWeekDate = _selectedWeekDate.subtract(const Duration(days: 7));
+                  _selectedWeekDate = previousMonthWeek(monthWeekOf(_selectedWeekDate)).start;
                 } else if (_selectedPeriod == 2) {
                   if (_selectedMonth == 1) {
                     _selectedMonth = 12;
@@ -359,20 +358,27 @@ class _StepsScreenState extends State<StepsScreen> {
               });
             },
           ),
-          InkWell(
-            onTap: _pickDate,
-            borderRadius: BorderRadius.circular(8),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              child: Row(
-                children: [
-                  const Icon(Icons.calendar_today_rounded, size: 16, color: AppColors.primary),
-                  const SizedBox(width: 8),
-                  Text(
-                    label,
-                    style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
-                  ),
-                ],
+          Flexible(
+            child: InkWell(
+              onTap: _pickDate,
+              borderRadius: BorderRadius.circular(8),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.calendar_today_rounded, size: 16, color: AppColors.primary),
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: Text(
+                        label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -390,12 +396,10 @@ class _StepsScreenState extends State<StepsScreen> {
                           _selectedYear = _selectedDate.year;
                         }
                       } else if (_selectedPeriod == 1) {
-                        final nextWeek = _selectedWeekDate.add(const Duration(days: 7));
-                        if (!_normalizeDate(nextWeek).isAfter(today)) {
-                          _selectedWeekDate = nextWeek;
-                        } else {
-                          _selectedWeekDate = today;
-                        }
+                        final nextWeek = nextMonthWeek(monthWeekOf(_selectedWeekDate), today);
+                        _selectedWeekDate = nextWeek == null
+                            ? today
+                            : (nextWeek.contains(today) ? today : nextWeek.start);
                       } else if (_selectedPeriod == 2) {
                         if (_selectedYear < today.year || (_selectedYear == today.year && _selectedMonth < today.month)) {
                           if (_selectedMonth == 12) {
@@ -521,28 +525,34 @@ class _StepsScreenState extends State<StepsScreen> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceAround,
                 children: [
-                  _MetricItem(
+                  Expanded(
+                    child: _MetricItem(
                     icon: Icons.local_fire_department_rounded,
                     color: Colors.orange,
                     value: cal.toStringAsFixed(1),
                     unit: 'kcal',
                     label: 'Burned',
+                    ),
                   ),
                   Container(height: 36, width: 1, color: Colors.black12),
-                  _MetricItem(
+                  Expanded(
+                    child: _MetricItem(
                     icon: Icons.place_rounded,
                     color: AppColors.secondary,
                     value: km.toStringAsFixed(2),
                     unit: 'km',
                     label: 'Distance',
+                    ),
                   ),
                   Container(height: 36, width: 1, color: Colors.black12),
-                  _MetricItem(
+                  Expanded(
+                    child: _MetricItem(
                     icon: Icons.timer_outlined,
                     color: Colors.purple,
                     value: '$mins',
                     unit: 'mins',
                     label: 'Active',
+                    ),
                   ),
                 ],
               ),
@@ -558,13 +568,10 @@ class _StepsScreenState extends State<StepsScreen> {
   Widget _buildWeeklyView(ThemeData theme, bool isDark, StepProvider stepProv) {
     final now = DateTime.now();
     final today = _normalizeDate(now);
-    final monday = DateTime(
-      _selectedWeekDate.year,
-      _selectedWeekDate.month,
-      _selectedWeekDate.day - (_selectedWeekDate.weekday - 1),
-    );
-    final sunday = DateTime(monday.year, monday.month, monday.day + 6);
-    final isCurrentWeek = !today.isBefore(monday) && !today.isAfter(sunday);
+    final week = monthWeekOf(_selectedWeekDate);
+    final monday = week.start;
+    final sunday = week.last;
+    final isCurrentWeek = week.contains(today);
 
     final weekRecords = stepProv.getWeekRecords(_selectedWeekDate);
     final summary = stepProv.getWeekSummary(_selectedWeekDate);
@@ -606,14 +613,17 @@ class _StepsScreenState extends State<StepsScreen> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text(
+                  Flexible(
+                   child: Text(
                     isCurrentWeek ? "THIS WEEK'S TOTAL" : 'WEEK TOTAL',
+                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       color: isDark ? Colors.white70 : Colors.teal.shade900,
                       fontSize: 11,
                       fontWeight: FontWeight.w800,
                       letterSpacing: 1.2,
                     ),
+                  ),
                   ),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -622,7 +632,7 @@ class _StepsScreenState extends State<StepsScreen> {
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: Text(
-                      '${summary.goalsReached} / 7 Goals',
+                      '${summary.goalsReached} / ${weekRecords.length} Goals',
                       style: const TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.w800,
@@ -656,28 +666,34 @@ class _StepsScreenState extends State<StepsScreen> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceAround,
                 children: [
-                  _MetricItem(
+                  Expanded(
+                    child: _MetricItem(
                     icon: Icons.speed_rounded,
                     color: AppColors.secondary,
                     value: NumberFormat('#,###').format(summary.dailyAverage),
                     unit: 'steps/d',
                     label: 'Daily Avg',
+                    ),
                   ),
                   Container(height: 36, width: 1, color: Colors.black12),
-                  _MetricItem(
+                  Expanded(
+                    child: _MetricItem(
                     icon: Icons.place_rounded,
                     color: Colors.teal,
                     value: summary.totalDistanceKm.toStringAsFixed(1),
                     unit: 'km',
                     label: 'Distance',
+                    ),
                   ),
                   Container(height: 36, width: 1, color: Colors.black12),
-                  _MetricItem(
+                  Expanded(
+                    child: _MetricItem(
                     icon: Icons.local_fire_department_rounded,
                     color: Colors.orange,
                     value: summary.totalCalories.toStringAsFixed(0),
                     unit: 'kcal',
                     label: 'Calories',
+                    ),
                   ),
                 ],
               ),
@@ -708,9 +724,13 @@ class _StepsScreenState extends State<StepsScreen> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text(
-                    '7-Day Activity Trend',
-                    style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+                  const Flexible(
+                    child: Text(
+                      'Daily Activity This Week',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+                    ),
                   ),
                   Row(
                     children: [
@@ -743,7 +763,7 @@ class _StepsScreenState extends State<StepsScreen> {
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: List.generate(7, (i) {
+                  children: List.generate(weekRecords.length, (i) {
                     final dayDate = DateTime(monday.year, monday.month, monday.day + i);
                     final isDayToday = _normalizeDate(dayDate) == today;
                     final isFuture = _normalizeDate(dayDate).isAfter(today);
@@ -754,7 +774,7 @@ class _StepsScreenState extends State<StepsScreen> {
                         ? 0.0
                         : (steps / effectiveChartMax).clamp(0.04, 1.0);
 
-                    final dayLabel = dayNames[i];
+                    final dayLabel = dayNames[dayDate.weekday - 1];
                     final dateNum = '${dayDate.day}';
 
                     String stepLabel = '—';
@@ -819,22 +839,9 @@ class _StepsScreenState extends State<StepsScreen> {
                                           end: Alignment.bottomCenter,
                                           colors: isFuture
                                               ? [Colors.transparent, Colors.transparent]
-                                              : isDayToday
-                                                  ? [const Color(0xFF2DD4BF), const Color(0xFF0D9488)]
-                                                  : isGoalMet
-                                                      ? [const Color(0xFF34D399), const Color(0xFF059669)]
-                                                      : [const Color(0xFF64748B), const Color(0xFF475569)],
+                                              : [AppColors.primaryLight, AppColors.primary],
                                         ),
                                         borderRadius: BorderRadius.circular(11),
-                                        boxShadow: isDayToday && steps > 0
-                                            ? [
-                                                BoxShadow(
-                                                  color: const Color(0xFF2DD4BF).withValues(alpha: 0.3),
-                                                  blurRadius: 8,
-                                                  offset: const Offset(0, -2),
-                                                ),
-                                              ]
-                                            : null,
                                       ),
                                       child: isGoalMet && barHeight >= 22
                                           ? const Align(
@@ -960,7 +967,7 @@ class _StepsScreenState extends State<StepsScreen> {
               ListView.separated(
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
-                itemCount: 7,
+                itemCount: weekRecords.length,
                 separatorBuilder: (_, __) => const Divider(height: 1),
                 itemBuilder: (ctx, idx) {
                   final dayDate = DateTime(monday.year, monday.month, monday.day + idx);
@@ -1337,9 +1344,7 @@ class _StepsScreenState extends State<StepsScreen> {
                           height: 125 * factor,
                           decoration: BoxDecoration(
                             gradient: LinearGradient(
-                              colors: isBest
-                                  ? [AppColors.primary, const Color(0xFF34D399)]
-                                  : [Colors.teal.shade700, Colors.teal.shade900],
+                              colors: const [AppColors.primaryLight, AppColors.primary],
                               begin: Alignment.topCenter,
                               end: Alignment.bottomCenter,
                             ),
@@ -1452,15 +1457,18 @@ class _MetricItem extends StatelessWidget {
       children: [
         Icon(icon, color: color, size: 20),
         const SizedBox(height: 4),
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.baseline,
-          textBaseline: TextBaseline.alphabetic,
-          children: [
-            Text(value, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
-            const SizedBox(width: 2),
-            Text(unit, style: TextStyle(fontSize: 10, color: Colors.grey.shade600)),
-          ],
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.baseline,
+            textBaseline: TextBaseline.alphabetic,
+            children: [
+              Text(value, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+              const SizedBox(width: 2),
+              Text(unit, style: TextStyle(fontSize: 10, color: Colors.grey.shade600)),
+            ],
+          ),
         ),
         Text(label, style: const TextStyle(fontSize: 11, color: Colors.grey)),
       ],

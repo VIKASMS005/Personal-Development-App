@@ -3,6 +3,7 @@ import 'package:grow_personal_dev/models/task_session.dart';
 import 'package:grow_personal_dev/models/todo.dart';
 import 'package:grow_personal_dev/providers/task_tracker_provider.dart';
 import 'package:grow_personal_dev/services/task_analytics.dart';
+import 'package:grow_personal_dev/utils/month_weeks.dart';
 
 void main() {
   final task = Todo(
@@ -184,20 +185,36 @@ void main() {
       expect(r.chart.last.counts.completed, 2);
     });
 
-    test('Weekly: Mon-Sun with future days marked, vs last week', () {
+    test('Weekly: the month week Oct 1-7, vs the previous week Sep 29-30', () {
       final r = analytics.report(AnalyticsPeriod.weekly, now);
-      expect(r.range.start, DateTime(2026, 10, 5)); // Monday
-      expect(r.chart.map((b) => b.label), ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']);
-      expect(r.chart[2].isCurrent, isTrue); // Wednesday Oct 7
-      expect(r.chart[3].isFuture, isTrue);
+      expect(r.range.start, DateTime(2026, 10, 1));
+      expect(r.range.end, DateTime(2026, 10, 8));
+      expect(r.chart.map((b) => b.label),
+          ['Thu\n1', 'Fri\n2', 'Sat\n3', 'Sun\n4', 'Mon\n5', 'Tue\n6', 'Wed\n7']);
+      expect(r.chart.last.isCurrent, isTrue); // Oct 7
       expect(r.current.completed, 3);
       expect(r.current.missed, 2);
-      // Mon-Wed this week vs Mon-Wed last week (Sep 28-30).
-      expect(r.comparedDays, 3);
+      // The week before Oct 1-7 is Sep 29-30: weeks never cross a month.
       expect(r.previous.completed, 1);
-      expect(r.previous.completionRate, 100);
       expect(r.current.focusSeconds, 1800);
-      expect(r.dailyAverageFocus, 600); // 30 min over Mon-Wed
+      expect(r.dailyAverageFocus, 1800 ~/ 7);
+    });
+
+    test('Weekly mid-month marks the rest of the week as future', () {
+      final mid = TaskAnalytics(todos: todos, sessions: sessions, now: DateTime(2026, 10, 10, 12))
+          .report(AnalyticsPeriod.weekly, DateTime(2026, 10, 10));
+      expect(mid.range.start, DateTime(2026, 10, 8));
+      expect(mid.chart, hasLength(7));
+      expect(mid.chart[2].isCurrent, isTrue); // Oct 10
+      expect(mid.chart[3].isFuture, isTrue);
+      expect(mid.comparedDays, 3); // Oct 8-10 vs Oct 1-3
+    });
+
+    test('Top tasks by time, highest first, goals excluded', () {
+      final top = analytics.topTasksByTime(rangeFor(AnalyticsPeriod.yearly, now));
+      expect(top, hasLength(1));
+      expect(top.single.title, 'a');
+      expect(top.single.seconds, 1800);
     });
 
     test('Monthly and yearly buckets', () {
@@ -220,6 +237,28 @@ void main() {
       final r = only.report(AnalyticsPeriod.daily, now);
       expect(r.previous.completionRate, isNull);
       expect(r.rateChange, isNull);
+    });
+  });
+
+  group('Month weeks never cross into the next month', () {
+    test('Weeks are 1-7, 8-14, 15-21, 22-28 and 29-end', () {
+      expect(monthWeekOf(DateTime(2026, 10, 1)).start, DateTime(2026, 10, 1));
+      expect(monthWeekOf(DateTime(2026, 10, 14)).last, DateTime(2026, 10, 14));
+      final last = monthWeekOf(DateTime(2026, 10, 30));
+      expect(last.start, DateTime(2026, 10, 29));
+      expect(last.last, DateTime(2026, 10, 31));
+      expect(last.length, 3);
+      expect(monthWeekOf(DateTime(2026, 2, 28)).length, 7); // Feb 22-28, no 5th week
+      expect(monthWeekOf(DateTime(2028, 2, 29)).length, 1); // leap day week
+    });
+
+    test('Previous and next weeks', () {
+      final first = monthWeekOf(DateTime(2026, 10, 3));
+      final prev = previousMonthWeek(first);
+      expect(prev.start, DateTime(2026, 9, 29));
+      expect(prev.last, DateTime(2026, 9, 30));
+      expect(nextMonthWeek(prev, DateTime(2026, 10, 7))!.start, DateTime(2026, 10, 1));
+      expect(nextMonthWeek(first, DateTime(2026, 10, 7)), isNull, reason: 'no future weeks');
     });
   });
 

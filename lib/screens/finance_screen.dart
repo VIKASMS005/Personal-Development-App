@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
+import '../utils/month_weeks.dart';
 import '../providers/app_providers.dart';
 import '../models/finance_transaction.dart';
 import '../utils/app_colors.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/animated_card.dart';
+import '../widgets/expense_insights.dart';
 import 'forms/finance_form.dart';
 
 enum FinancePeriod { daily, weekly, monthly, yearly, all }
@@ -30,9 +32,10 @@ class _FinanceScreenState extends State<FinanceScreen> {
             t.date.day == _selectedDate.day).toList();
 
       case FinancePeriod.weekly:
-        final startOfWeek = _selectedDate.subtract(Duration(days: _selectedDate.weekday - 1));
-        final start = DateTime(startOfWeek.year, startOfWeek.month, startOfWeek.day);
-        final end = start.add(const Duration(days: 7));
+        // Weeks stay inside their month (1–7, 8–14, ...).
+        final week = monthWeekOf(_selectedDate);
+        final start = week.start;
+        final end = week.end;
         return all.where((t) =>
             t.date.isAfter(start.subtract(const Duration(seconds: 1))) &&
             t.date.isBefore(end)).toList();
@@ -57,7 +60,7 @@ class _FinanceScreenState extends State<FinanceScreen> {
           _selectedDate = _selectedDate.subtract(const Duration(days: 1));
           break;
         case FinancePeriod.weekly:
-          _selectedDate = _selectedDate.subtract(const Duration(days: 7));
+          _selectedDate = previousMonthWeek(monthWeekOf(_selectedDate)).start;
           break;
         case FinancePeriod.monthly:
           _selectedDate = DateTime(_selectedDate.year, _selectedDate.month - 1, 1);
@@ -78,7 +81,7 @@ class _FinanceScreenState extends State<FinanceScreen> {
           _selectedDate = _selectedDate.add(const Duration(days: 1));
           break;
         case FinancePeriod.weekly:
-          _selectedDate = _selectedDate.add(const Duration(days: 7));
+          _selectedDate = monthWeekOf(_selectedDate).end;
           break;
         case FinancePeriod.monthly:
           _selectedDate = DateTime(_selectedDate.year, _selectedDate.month + 1, 1);
@@ -148,8 +151,9 @@ class _FinanceScreenState extends State<FinanceScreen> {
         return DateFormat('EEEE, MMM dd, yyyy').format(_selectedDate);
 
       case FinancePeriod.weekly:
-        final startOfWeek = _selectedDate.subtract(Duration(days: _selectedDate.weekday - 1));
-        final endOfWeek = startOfWeek.add(const Duration(days: 6));
+        final week = monthWeekOf(_selectedDate);
+        final startOfWeek = week.start;
+        final endOfWeek = week.last;
         return '${DateFormat('MMM dd').format(startOfWeek)} - ${DateFormat('MMM dd, yyyy').format(endOfWeek)}';
 
       case FinancePeriod.monthly:
@@ -181,6 +185,7 @@ class _FinanceScreenState extends State<FinanceScreen> {
       }
     }
     final netBalance = income - expense;
+    final isLongView = _selectedPeriod == FinancePeriod.yearly || _selectedPeriod == FinancePeriod.all;
 
     // Category breakdown
     final Map<String, double> categoryExpenses = {};
@@ -253,23 +258,29 @@ class _FinanceScreenState extends State<FinanceScreen> {
                             tooltip: 'Previous',
                             onPressed: _previousPeriod,
                           ),
-                          InkWell(
-                            onTap: _pickCustomDate,
-                            borderRadius: BorderRadius.circular(8),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  const Icon(Icons.calendar_month_rounded, size: 16, color: AppColors.finance),
-                                  const SizedBox(width: 6),
-                                  Text(
-                                    _periodHeaderLabel(),
-                                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
-                                  ),
-                                  const SizedBox(width: 4),
-                                  const Icon(Icons.arrow_drop_down_rounded, size: 18),
-                                ],
+                          Flexible(
+                            child: InkWell(
+                              onTap: _pickCustomDate,
+                              borderRadius: BorderRadius.circular(8),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Icon(Icons.calendar_month_rounded, size: 16, color: AppColors.finance),
+                                    const SizedBox(width: 6),
+                                    Flexible(
+                                      child: Text(
+                                        _periodHeaderLabel(),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 4),
+                                    const Icon(Icons.arrow_drop_down_rounded, size: 18),
+                                  ],
+                                ),
                               ),
                             ),
                           ),
@@ -354,19 +365,24 @@ class _FinanceScreenState extends State<FinanceScreen> {
                                         children: [
                                           Icon(Icons.arrow_upward_rounded, size: 14, color: AppColors.success),
                                           SizedBox(width: 4),
-                                          Text(
+                                          Flexible(
+                                           child: Text(
                                             'Income',
+                                            overflow: TextOverflow.ellipsis,
                                             style: TextStyle(
                                               fontSize: 12,
                                               fontWeight: FontWeight.w600,
                                               color: AppColors.success,
                                             ),
                                           ),
+                                          ),
                                         ],
                                       ),
                                       const SizedBox(height: 4),
                                       Text(
                                         '+₹${income.toStringAsFixed(0)}',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
                                         style: const TextStyle(
                                           fontSize: 14,
                                           fontWeight: FontWeight.w800,
@@ -395,19 +411,24 @@ class _FinanceScreenState extends State<FinanceScreen> {
                                         children: [
                                           Icon(Icons.arrow_downward_rounded, size: 14, color: AppColors.error),
                                           SizedBox(width: 4),
-                                          Text(
+                                          Flexible(
+                                           child: Text(
                                             'Expenses',
+                                            overflow: TextOverflow.ellipsis,
                                             style: TextStyle(
                                               fontSize: 12,
                                               fontWeight: FontWeight.w600,
                                               color: AppColors.error,
                                             ),
                                           ),
+                                          ),
                                         ],
                                       ),
                                       const SizedBox(height: 4),
                                       Text(
                                         '-₹${expense.toStringAsFixed(0)}',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
                                         style: const TextStyle(
                                           fontSize: 14,
                                           fontWeight: FontWeight.w800,
@@ -431,38 +452,8 @@ class _FinanceScreenState extends State<FinanceScreen> {
                               style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
                             ),
                             const SizedBox(height: 8),
-                            Wrap(
-                              spacing: 8,
-                              runSpacing: 8,
-                              children: categoryExpenses.entries.map((e) {
-                                final pct = expense > 0 ? (e.value / expense * 100).toStringAsFixed(0) : '0';
-                                return Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                  decoration: BoxDecoration(
-                                    color: theme.dividerColor.withValues(alpha: 0.15),
-                                    borderRadius: BorderRadius.circular(10),
-                                  ),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Text(
-                                        e.key,
-                                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-                                      ),
-                                      const SizedBox(width: 6),
-                                      Text(
-                                        '₹${e.value.toStringAsFixed(0)} ($pct%)',
-                                        style: TextStyle(
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.w700,
-                                          color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                );
-                              }).toList(),
-                            ),
+                            const SizedBox(height: 4),
+                            Center(child: ExpensePieChart(transactions: filteredTxs)),
                           ],
                         ],
                       ),
@@ -471,6 +462,31 @@ class _FinanceScreenState extends State<FinanceScreen> {
                 ),
               ),
 
+              // Yearly / All-Time: spending by category instead of every transaction
+              if (isLongView) ...[
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 14, 20, 8),
+                    child: Text(
+                      'Spending by Category',
+                      style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ),
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+                    child: categoryExpenses.isEmpty
+                        ? EmptyState(
+                            icon: Icons.pie_chart_outline_rounded,
+                            title: 'No expenses in this period',
+                            subtitle: 'Tap + below to add an expense',
+                            iconColor: AppColors.finance,
+                          )
+                        : CategoryExpenseList(transactions: filteredTxs),
+                  ),
+                ),
+              ] else ...[
               // 4. Transactions Section Header
               SliverToBoxAdapter(
                 child: Padding(
@@ -478,9 +494,12 @@ class _FinanceScreenState extends State<FinanceScreen> {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text(
-                        'Transactions',
-                        style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+                      Flexible(
+                        child: Text(
+                          'Transactions',
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+                        ),
                       ),
                       Text(
                         '${filteredTxs.length} items',
@@ -630,6 +649,7 @@ class _FinanceScreenState extends State<FinanceScreen> {
                     childCount: filteredTxs.length,
                   ),
                 ),
+              ],
               const SliverPadding(padding: EdgeInsets.only(bottom: 90)),
             ],
           ),

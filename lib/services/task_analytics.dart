@@ -1,5 +1,6 @@
 import '../models/task_session.dart';
 import '../models/todo.dart';
+import '../utils/month_weeks.dart';
 
 /// Analytics periods. There is deliberately no "all time" period.
 enum AnalyticsPeriod { daily, weekly, monthly, yearly }
@@ -30,8 +31,8 @@ DateRange rangeFor(AnalyticsPeriod period, DateTime anchor) {
     case AnalyticsPeriod.daily:
       return DateRange(d, DateTime(d.year, d.month, d.day + 1));
     case AnalyticsPeriod.weekly:
-      final monday = DateTime(d.year, d.month, d.day - (d.weekday - 1));
-      return DateRange(monday, DateTime(monday.year, monday.month, monday.day + 7));
+      final week = monthWeekOf(d);
+      return DateRange(week.start, week.end);
     case AnalyticsPeriod.monthly:
       return DateRange(DateTime(d.year, d.month), DateTime(d.year, d.month + 1));
     case AnalyticsPeriod.yearly:
@@ -46,7 +47,7 @@ DateTime previousAnchor(AnalyticsPeriod period, DateTime anchor) {
     case AnalyticsPeriod.daily:
       return DateTime(d.year, d.month, d.day - 1);
     case AnalyticsPeriod.weekly:
-      return DateTime(d.year, d.month, d.day - 7);
+      return previousMonthWeek(monthWeekOf(d)).start;
     case AnalyticsPeriod.monthly:
       return DateTime(d.year, d.month - 1, 1);
     case AnalyticsPeriod.yearly:
@@ -89,6 +90,14 @@ class TaskCounts {
   /// Completed share of all tasks in the range, 0..100. Null when there were
   /// no tasks, so callers never show a made-up 0% or an infinite change.
   int? get completionRate => total == 0 ? null : ((completed / total) * 100).round();
+}
+
+/// Total focus on one task.
+class TaskTime {
+  final String title;
+  final int seconds;
+  final int sessions;
+  const TaskTime({required this.title, required this.seconds, required this.sessions});
 }
 
 /// One bar in a period chart.
@@ -292,11 +301,12 @@ class TaskAnalytics {
               current: i == 6);
         });
       case AnalyticsPeriod.weekly:
-        return List.generate(7, (i) {
-          final day = DateTime(range.start.year, range.start.month, range.start.day + i);
-          return bucket(_weekdays[i], day, DateTime(day.year, day.month, day.day + 1),
+        // Every day of the week, which stays inside its month.
+        return monthWeekOf(range.start).days.map((day) {
+          return bucket('${_weekdays[day.weekday - 1]}\n${day.day}', day,
+              DateTime(day.year, day.month, day.day + 1),
               current: day == today);
-        });
+        }).toList();
       case AnalyticsPeriod.monthly:
         // Week-sized slices of the month: 1–7, 8–14, 15–21, 22–28, 29–end.
         final buckets = <ChartBucket>[];
@@ -317,6 +327,24 @@ class TaskAnalytics {
           return bucket(_months[i], start, end, current: DateRange(start, end).contains(today));
         });
     }
+  }
+
+  /// Tasks with the most timed focus inside [range], highest first.
+  List<TaskTime> topTasksByTime(DateRange range, {int limit = 10}) {
+    final today = dayOf(now);
+    final byTask = <String, TaskTime>{};
+    for (final s in sessions) {
+      final day = DateTime.tryParse(s.date);
+      if (day == null || !range.contains(day) || day.isAfter(today)) continue;
+      final prev = byTask[s.taskId];
+      byTask[s.taskId] = TaskTime(
+        title: prev?.title ?? s.taskTitle,
+        seconds: (prev?.seconds ?? 0) + s.durationSeconds,
+        sessions: (prev?.sessions ?? 0) + 1,
+      );
+    }
+    final list = byTask.values.toList()..sort((a, b) => b.seconds.compareTo(a.seconds));
+    return list.take(limit).toList();
   }
 
   /// Timer sessions that happened on [day]. Never returns anything for a

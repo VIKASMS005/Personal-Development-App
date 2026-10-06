@@ -46,9 +46,9 @@ class _TodoFormState extends State<TodoForm> {
   ];
 
   static const _priorityOptions = [
-    (1, 'Urgent & Important', AppColors.error),
+    (1, 'Urgent', AppColors.error),
     (2, 'Important', AppColors.warning),
-    (3, 'Urgent', AppColors.secondary),
+    (3, 'Medium Priority', AppColors.secondary),
     (4, 'Low Priority', AppColors.lightTextSecondary),
   ];
 

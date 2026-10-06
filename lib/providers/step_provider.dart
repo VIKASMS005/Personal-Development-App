@@ -5,6 +5,7 @@ import '../models/step_record.dart';
 import '../services/database_service.dart';
 import '../services/health_history_service.dart';
 import '../services/step_tracker_service.dart';
+import '../utils/month_weeks.dart';
 
 class WeeklySummary {
   final int totalSteps;
@@ -129,16 +130,15 @@ class StepProvider extends ChangeNotifier {
     return (total / list.length).round();
   }
 
-  /// Returns the 7 StepRecords for Monday through Sunday of the week containing [anchorDate].
+  /// Returns one StepRecord per day of the week containing [anchorDate].
+  /// Weeks stay inside their month (1–7, 8–14, 15–21, 22–28, 29–end), so the
+  /// last week of a month can have fewer than 7 days.
   /// Future days in the week will have stepCount = 0.
   List<StepRecord> getWeekRecords(DateTime anchorDate) {
-    // In Dart DateTime, weekday is 1=Monday, ..., 7=Sunday
-    final monday = DateTime(anchorDate.year, anchorDate.month, anchorDate.day - (anchorDate.weekday - 1));
     final today = DateTime.now();
     final todayStr = formatCanonicalDate(today);
 
-    return List.generate(7, (i) {
-      final d = DateTime(monday.year, monday.month, monday.day + i);
+    return monthWeekOf(anchorDate).days.map((d) {
       final dateStr = formatCanonicalDate(d);
 
       if (dateStr == todayStr && _todayRecord != null) {
@@ -150,18 +150,17 @@ class StepProvider extends ChangeNotifier {
         orElse: () => StepRecord(date: dateStr, stepCount: 0, goal: _dailyGoal),
       );
       return match;
-    });
+    }).toList();
   }
 
-  /// Calculates weekly performance metrics for the week containing [anchorDate] (Monday to Sunday).
+  /// Calculates weekly performance metrics for the (month-bound) week containing [anchorDate].
   WeeklySummary getWeekSummary(DateTime anchorDate) {
     final records = getWeekRecords(anchorDate);
     final today = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
-    final monday = DateTime(anchorDate.year, anchorDate.month, anchorDate.day - (anchorDate.weekday - 1));
+    final days = monthWeekOf(anchorDate).days;
 
     int daysElapsed = 0;
-    for (int i = 0; i < 7; i++) {
-      final d = DateTime(monday.year, monday.month, monday.day + i);
+    for (final d in days) {
       if (!d.isAfter(today)) {
         daysElapsed++;
       }
@@ -175,8 +174,8 @@ class StepProvider extends ChangeNotifier {
     final goalsReached = records.where((r) => r.isGoalReached).length;
 
     final activeRecords = <StepRecord>[];
-    for (int i = 0; i < 7; i++) {
-      final d = DateTime(monday.year, monday.month, monday.day + i);
+    for (int i = 0; i < days.length; i++) {
+      final d = days[i];
       if (!d.isAfter(today)) {
         activeRecords.add(records[i]);
       }
@@ -202,7 +201,7 @@ class StepProvider extends ChangeNotifier {
     );
   }
 
-  /// Convenience getters for the current week (Monday to Sunday)
+  /// Convenience getters for the current week
   List<StepRecord> get currentWeekRecords => getWeekRecords(DateTime.now());
   WeeklySummary get currentWeekSummary => getWeekSummary(DateTime.now());
 

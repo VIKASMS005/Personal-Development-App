@@ -6,6 +6,7 @@ import 'package:grow_personal_dev/models/journal_entry.dart';
 import 'package:grow_personal_dev/services/notification_service.dart';
 import 'package:grow_personal_dev/models/screen_time_record.dart';
 import 'package:grow_personal_dev/models/step_record.dart';
+import 'package:grow_personal_dev/utils/month_weeks.dart';
 
 void main() {
   test('Screen-time summaries round-trip daily and per-app data', () {
@@ -682,17 +683,16 @@ void main() {
     });
   });
 
-  group('Weekly Steps Calculation & Monday-to-Sunday Alignment Tests', () {
-    test('Calculates Monday to Sunday range correctly for any given anchor day', () {
-      // Wednesday Sep 16, 2026 -> Monday Sep 14 to Sunday Sep 20
-      final wednesday = DateTime(2026, 9, 16);
-      final monday = DateTime(wednesday.year, wednesday.month, wednesday.day - (wednesday.weekday - 1));
-      final sunday = DateTime(monday.year, monday.month, monday.day + 6);
-
-      expect(monday, equals(DateTime(2026, 9, 14)));
-      expect(sunday, equals(DateTime(2026, 9, 20)));
-      expect(monday.weekday, equals(DateTime.monday));
-      expect(sunday.weekday, equals(DateTime.sunday));
+  group('Weekly Steps Calculation & Month-Week Alignment Tests', () {
+    test('Weeks stay inside the month for any given anchor day', () {
+      // Wednesday Sep 16, 2026 -> week Sep 15 to Sep 21
+      final week = monthWeekOf(DateTime(2026, 9, 16));
+      expect(week.start, equals(DateTime(2026, 9, 15)));
+      expect(week.last, equals(DateTime(2026, 9, 21)));
+      // Sep 30 -> Sep 29 to Sep 30, never running into October
+      final lastWeek = monthWeekOf(DateTime(2026, 9, 30));
+      expect(lastWeek.start, equals(DateTime(2026, 9, 29)));
+      expect(lastWeek.days, hasLength(2));
     });
 
     test('WeeklySummary calculates total steps, daily average, highest and lowest days accurately', () {

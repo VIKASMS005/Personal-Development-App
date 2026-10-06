@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../models/finance_transaction.dart';
 import '../utils/app_colors.dart';
+import '../utils/month_weeks.dart';
 
 class WeeklyExpenseChart extends StatelessWidget {
   final List<FinanceTransaction> transactions;
@@ -20,17 +21,20 @@ class WeeklyExpenseChart extends StatelessWidget {
     final isDark = theme.brightness == Brightness.dark;
     final now = DateTime.now();
 
-    // Determine current week's Monday (start) and Sunday (end)
-    final monday = DateTime(now.year, now.month, now.day).subtract(Duration(days: now.weekday - 1));
+    // Current week; weeks stay inside their month (1–7, 8–14, ...).
+    final week = monthWeekOf(now);
+    final days = week.days;
+    final monday = week.start;
 
-    final dayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-    final List<double> dayExpenses = List.filled(7, 0.0);
+    final weekdayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    final dayLabels = [for (final d in days) weekdayNames[d.weekday - 1]];
+    final List<double> dayExpenses = List.filled(days.length, 0.0);
 
     for (final tx in transactions) {
       if (tx.amount < 0) {
         final txDate = DateTime(tx.date.year, tx.date.month, tx.date.day);
-        final diffDays = txDate.difference(monday).inDays;
-        if (diffDays >= 0 && diffDays < 7) {
+        final diffDays = txDate.day - monday.day;
+        if (week.contains(txDate) && diffDays >= 0 && diffDays < days.length) {
           dayExpenses[diffDays] += tx.amount.abs();
         }
       }
@@ -38,7 +42,8 @@ class WeeklyExpenseChart extends StatelessWidget {
 
     final totalWeeklyExpense = dayExpenses.reduce((a, b) => a + b);
     final maxExpense = dayExpenses.reduce((a, b) => math.max(a, b));
-    final currentDayIndex = now.weekday - 1;
+    final currentDayIndex = now.day - monday.day;
+    final elapsedDays = currentDayIndex + 1;
 
     return Card(
       child: Padding(
@@ -69,7 +74,7 @@ class WeeklyExpenseChart extends StatelessWidget {
                           style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
                         ),
                         Text(
-                          'Mon ${DateFormat('d').format(monday)} – Sun ${DateFormat('d MMM').format(monday.add(const Duration(days: 6)))}',
+                          '${DateFormat('MMM d').format(monday)} – ${DateFormat('d MMM').format(week.last)}',
                           style: TextStyle(
                             fontSize: 11,
                             color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
@@ -96,22 +101,36 @@ class WeeklyExpenseChart extends StatelessWidget {
             // Total spent badge & Average
             Row(
               children: [
-                Text(
-                  '₹${totalWeeklyExpense.toStringAsFixed(0)}',
-                  style: theme.textTheme.headlineSmall?.copyWith(
-                    fontWeight: FontWeight.w800,
-                    color: totalWeeklyExpense > 0 ? AppColors.error : AppColors.primary,
+                Expanded(
+                  child: Row(
+                    children: [
+                    Flexible(
+                     child: Text(
+                      '₹${totalWeeklyExpense.toStringAsFixed(0)}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.headlineSmall?.copyWith(
+                        fontWeight: FontWeight.w800,
+                        color: totalWeeklyExpense > 0 ? AppColors.error : AppColors.primary,
+                      ),
+                    ),
+                    ),
+                    const SizedBox(width: 8),
+                    Flexible(
+                     child: Text(
+                      'spent this week',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                      ),
+                    ),
+                    ),
+                    ],
                   ),
                 ),
                 const SizedBox(width: 8),
-                Text(
-                  'spent this week',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
-                  ),
-                ),
-                const Spacer(),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(
@@ -119,7 +138,7 @@ class WeeklyExpenseChart extends StatelessWidget {
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Text(
-                    'Avg: ₹${(totalWeeklyExpense / 7).toStringAsFixed(0)}/day',
+                    'Avg: ₹${(totalWeeklyExpense / elapsedDays).toStringAsFixed(0)}/day',
                     style: TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w600,
@@ -136,7 +155,7 @@ class WeeklyExpenseChart extends StatelessWidget {
               height: 130,
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
-                children: List.generate(7, (i) {
+                children: List.generate(days.length, (i) {
                   final expense = dayExpenses[i];
                   final isToday = i == currentDayIndex;
                   final double fillRatio = maxExpense > 0 ? (expense / maxExpense).clamp(0.08, 1.0) : 0.08;
@@ -171,38 +190,17 @@ class WeeklyExpenseChart extends StatelessWidget {
                                 height: 85 * fillRatio,
                                 width: double.infinity,
                                 decoration: BoxDecoration(
-                                  gradient: isToday
-                                      ? LinearGradient(
-                                          begin: Alignment.topCenter,
-                                          end: Alignment.bottomCenter,
-                                          colors: [
-                                            AppColors.finance,
-                                            AppColors.finance.withValues(alpha: 0.7),
+                                  gradient: LinearGradient(
+                                    begin: Alignment.topCenter,
+                                    end: Alignment.bottomCenter,
+                                    colors: expense > 0
+                                        ? const [Color(0xFFF87171), AppColors.error]
+                                        : [
+                                            theme.dividerColor.withValues(alpha: isDark ? 0.3 : 0.4),
+                                            theme.dividerColor.withValues(alpha: isDark ? 0.15 : 0.2),
                                           ],
-                                        )
-                                      : LinearGradient(
-                                          begin: Alignment.topCenter,
-                                          end: Alignment.bottomCenter,
-                                          colors: expense > 0
-                                              ? [
-                                                  AppColors.error.withValues(alpha: 0.7),
-                                                  AppColors.error.withValues(alpha: 0.4),
-                                                ]
-                                              : [
-                                                  theme.dividerColor.withValues(alpha: isDark ? 0.3 : 0.4),
-                                                  theme.dividerColor.withValues(alpha: isDark ? 0.15 : 0.2),
-                                                ],
-                                        ),
+                                  ),
                                   borderRadius: BorderRadius.circular(6),
-                                  boxShadow: isToday
-                                      ? [
-                                          BoxShadow(
-                                            color: AppColors.finance.withValues(alpha: 0.3),
-                                            blurRadius: 6,
-                                            offset: const Offset(0, 2),
-                                          ),
-                                        ]
-                                      : null,
                                 ),
                               ),
                             ),

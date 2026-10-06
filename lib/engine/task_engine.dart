@@ -1,4 +1,5 @@
 import '../models/todo.dart';
+import '../utils/month_weeks.dart';
 
 /// Pure computation engine for Task/Todo analytics.
 /// No database access, no Flutter dependencies.
@@ -14,10 +15,6 @@ class TaskEngine {
 
   static String _dateStr(DateTime d) => d.toIso8601String().split('T')[0];
 
-  static DateTime _startOfWeek(DateTime ref) {
-    final monday = ref.subtract(Duration(days: ref.weekday - 1));
-    return DateTime(monday.year, monday.month, monday.day);
-  }
 
   // ─── Basic Counts ──────────────────────────────────────────────────────────
   // FIX C3: All user-facing counts use _tasks (task-only), not todos (all items).
@@ -58,20 +55,19 @@ class TaskEngine {
 
   // ─── Weekly Trends ─────────────────────────────────────────────────────────
 
-  int _completedInWeek(DateTime weekStart) {
+  // Weeks stay inside their month (1–7, 8–14, ...); see month_weeks.dart.
+  int _completedInWeek(MonthWeek week) {
     int count = 0;
-    for (int i = 0; i < 7; i++) {
-      final d = weekStart.add(Duration(days: i));
+    for (final d in week.days) {
       count += completedOn(d).length;
     }
     return count;
   }
 
-  int get completedThisWeek =>
-      _completedInWeek(_startOfWeek(DateTime.now()));
+  int get completedThisWeek => _completedInWeek(monthWeekOf(DateTime.now()));
 
   int get completedLastWeek =>
-      _completedInWeek(_startOfWeek(DateTime.now()).subtract(const Duration(days: 7)));
+      _completedInWeek(previousMonthWeek(monthWeekOf(DateTime.now())));
 
   /// Percentage change in weekly completions vs last week.
   /// Returns null if last week had 0 completions (can't compute %).

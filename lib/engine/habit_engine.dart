@@ -1,4 +1,5 @@
 import '../models/habit.dart';
+import '../utils/month_weeks.dart';
 
 /// Pure computation engine for Habit analytics.
 /// Maps: date string (ISO8601 date part) → bool (completed)
@@ -11,14 +12,7 @@ class HabitEngine {
 
   // ─── Week Boundaries ───────────────────────────────────────────────────────
 
-  static DateTime _startOfWeek(DateTime ref) {
-    final monday = ref.subtract(Duration(days: ref.weekday - 1));
-    return DateTime(monday.year, monday.month, monday.day);
-  }
-
-  static DateTime _startOfPreviousWeek(DateTime ref) {
-    return _startOfWeek(ref).subtract(const Duration(days: 7));
-  }
+  // Weeks stay inside their month (1–7, 8–14, ...); see month_weeks.dart.
 
   static String _dateStr(DateTime d) => d.toIso8601String().split('T')[0];
 
@@ -40,11 +34,11 @@ class HabitEngine {
     return count;
   }
 
-  /// Completion rate for [h] in the current week (Mon–today), 0.0–1.0.
+  /// Completion rate for [h] in the current week (week start–today), 0.0–1.0.
   double completionRateThisWeek(Habit h) {
     final now = DateTime.now();
-    final weekStart = _startOfWeek(now);
-    final daysElapsed = now.difference(weekStart).inDays + 1;
+    final weekStart = monthWeekOf(now).start;
+    final daysElapsed = now.day - weekStart.day + 1;
     if (daysElapsed == 0) return 0.0;
     int done = 0;
     for (int i = 0; i < daysElapsed; i++) {
@@ -54,15 +48,14 @@ class HabitEngine {
     return done / daysElapsed;
   }
 
-  /// Completion rate for [h] in the previous complete week (Mon–Sun), 0.0–1.0.
+  /// Completion rate for [h] in the previous complete week, 0.0–1.0.
   double completionRateLastWeek(Habit h) {
-    final prevStart = _startOfPreviousWeek(DateTime.now());
+    final prev = previousMonthWeek(monthWeekOf(DateTime.now()));
     int done = 0;
-    for (int i = 0; i < 7; i++) {
-      final d = prevStart.add(Duration(days: i));
+    for (final d in prev.days) {
       if (h.history[_dateStr(d)] == true) done++;
     }
-    return done / 7.0;
+    return done / prev.length;
   }
 
   /// Current streak for [h] counting consecutive days ending today (or yesterday).

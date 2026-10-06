@@ -20,13 +20,12 @@ class _TodosScreenState extends State<TodosScreen>
     with SingleTickerProviderStateMixin {
   int _selectedMainTab = 0; // 0=Tasks, 1=Goals
   int _selectedStatusFilter = 0; // 0=Scheduled/Active, 1=Completed, 2=Missed/Overdue, 3=All
-  int _selectedPriorityFilter = 0; // 0=All, 1=Urgent&Important, 2=Important, 3=Urgent, 4=Low
   String _searchQuery = '';
 
   static const _priorityLabels = {
-    1: ('Urgent & Important', AppColors.error),
+    1: ('Urgent', AppColors.error),
     2: ('Important', AppColors.warning),
-    3: ('Urgent', AppColors.secondary),
+    3: ('Medium Priority', AppColors.secondary),
     4: ('Low Priority', AppColors.lightTextSecondary),
   };
 
@@ -57,25 +56,17 @@ class _TodosScreenState extends State<TodosScreen>
 
     final statusFilters = isGoalsTab
         ? [
-            'Active (${scheduledOrActive.length})',
-            'Completed (${completed.length})',
-            'Overdue (${missedOrOverdue.length})',
-            'All (${all.length})',
+            'Active\n(${scheduledOrActive.length})',
+            'Completed\n(${completed.length})',
+            'Overdue\n(${missedOrOverdue.length})',
+            'All\n(${all.length})',
           ]
         : [
-            'Scheduled (${scheduledOrActive.length})',
-            'Completed (${completed.length})',
-            'Missed (${missedOrOverdue.length})',
-            'All (${all.length})',
+            'Scheduled\n(${scheduledOrActive.length})',
+            'Completed\n(${completed.length})',
+            'Missed\n(${missedOrOverdue.length})',
+            'All\n(${all.length})',
           ];
-
-    final priorityFilters = [
-      'All Priorities',
-      '🚨 Urgent & Important',
-      '⭐ Important',
-      '⚡ Urgent',
-      '🌱 Low Priority',
-    ];
 
     List<Todo> sourceList;
     switch (_selectedStatusFilter) {
@@ -100,9 +91,6 @@ class _TodosScreenState extends State<TodosScreen>
             !t.description.toLowerCase().contains(_searchQuery.toLowerCase())) {
           return false;
         }
-      }
-      if (_selectedPriorityFilter > 0) {
-        if (t.priority != _selectedPriorityFilter) return false;
       }
       return true;
     }).toList();
@@ -311,90 +299,57 @@ class _TodosScreenState extends State<TodosScreen>
                     ),
 
                     // ── 3. Status Filters: Scheduled/Active -> Completed -> Missed -> All ──
-                    SizedBox(
-                      height: 42,
-                      child: ListView.builder(
-                        scrollDirection: Axis.horizontal,
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        itemCount: statusFilters.length,
-                        itemBuilder: (context, i) {
+                    // All four fit on screen so "All" is never hidden off the edge.
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Row(
+                        children: List.generate(statusFilters.length, (i) {
                           final isSelected = _selectedStatusFilter == i;
                           final isMissedTab = i == 2;
                           final activeColor = isGoalsTab ? AppColors.secondary : AppColors.tasks;
 
-                          return Padding(
-                            padding: const EdgeInsets.only(right: 8),
-                            child: ChoiceChip(
-                              label: Text(statusFilters[i]),
-                              selected: isSelected,
-                              selectedColor: isMissedTab
-                                  ? AppColors.error.withValues(alpha: 0.2)
-                                  : activeColor.withValues(alpha: 0.2),
-                              labelStyle: TextStyle(
-                                fontSize: 12,
-                                fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-                                color: isSelected
-                                    ? (isMissedTab ? AppColors.error : activeColor)
-                                    : theme.colorScheme.onSurface.withValues(alpha: 0.7),
-                              ),
-                              onSelected: (_) => setState(() => _selectedStatusFilter = i),
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-                    const SizedBox(height: 6),
+                          final color = isMissedTab ? AppColors.error : activeColor;
 
-                    // ── 4. Priority Filter Pills (No Q1, Q2, Q3, Q4) ────────────
-                    SizedBox(
-                      height: 36,
-                      child: ListView.builder(
-                        scrollDirection: Axis.horizontal,
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        itemCount: priorityFilters.length,
-                        itemBuilder: (context, i) {
-                          final isSelected = _selectedPriorityFilter == i;
-                          return Padding(
-                            padding: const EdgeInsets.only(right: 6),
-                            child: FilterChip(
-                              label: Text(
-                                priorityFilters[i],
-                                style: TextStyle(
-                                  fontSize: 11.5,
-                                  fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-                                  color: isSelected
-                                      ? (i == 1
-                                          ? AppColors.error
-                                          : i == 2
-                                              ? AppColors.warning
-                                              : i == 3
-                                                  ? AppColors.secondary
-                                                  : i == 4
-                                                      ? AppColors.lightTextSecondary
-                                                      : (isGoalsTab ? AppColors.secondary : AppColors.tasks))
-                                      : theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                          return Expanded(
+                            child: Padding(
+                              padding: EdgeInsets.only(right: i == statusFilters.length - 1 ? 0 : 6),
+                              child: Material(
+                                color: isSelected ? color.withValues(alpha: 0.18) : Colors.transparent,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                  side: BorderSide(
+                                    color: isSelected ? color.withValues(alpha: 0.5) : theme.dividerColor,
+                                  ),
                                 ),
-                              ),
-                              selected: isSelected,
-                              onSelected: (_) => setState(() => _selectedPriorityFilter = i),
-                              showCheckmark: false,
-                              padding: const EdgeInsets.symmetric(horizontal: 4),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(16),
-                                side: BorderSide(
-                                  color: isSelected
-                                      ? (isGoalsTab ? AppColors.secondary : AppColors.tasks).withValues(alpha: 0.5)
-                                      : theme.dividerColor.withValues(alpha: 0.4),
+                                child: InkWell(
+                                  borderRadius: BorderRadius.circular(10),
+                                  onTap: () => setState(() => _selectedStatusFilter = i),
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+                                    child: FittedBox(
+                                      fit: BoxFit.scaleDown,
+                                      child: Text(
+                                        statusFilters[i],
+                                        textAlign: TextAlign.center,
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          height: 1.25,
+                                          fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                                          color: isSelected ? color : theme.colorScheme.onSurface.withValues(alpha: 0.7),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
                                 ),
                               ),
                             ),
                           );
-                        },
+                        }),
                       ),
                     ),
                     const SizedBox(height: 8),
 
-                    // ── 5. Items List View ────────────────────────────────────
+                    // ── 4. Items List View ────────────────────────────────────
                     Expanded(
                       child: filtered.isEmpty
                           ? EmptyState(
@@ -500,7 +455,8 @@ class _TodosScreenState extends State<TodosScreen>
                                       child: Row(
                                         crossAxisAlignment: CrossAxisAlignment.start,
                                         children: [
-                                          // Checkbox
+                                          // Checkbox (missed items can't be completed, so none is shown)
+                                          if (!isMissed) ...[
                                           Transform.scale(
                                             scale: 1.1,
                                             child: Checkbox(
@@ -515,6 +471,7 @@ class _TodosScreenState extends State<TodosScreen>
                                             ),
                                           ),
                                           const SizedBox(width: 8),
+                                          ],
 
                                           // Details
                                           Expanded(
@@ -618,7 +575,7 @@ class _TodosScreenState extends State<TodosScreen>
                                                       ),
                                                     ),
 
-                                                    // Priority Tag (Clean name: Urgent & Important, Important, Urgent, Low Priority)
+                                                    // Priority Tag
                                                     Container(
                                                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                                                       decoration: BoxDecoration(
