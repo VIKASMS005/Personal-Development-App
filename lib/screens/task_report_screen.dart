@@ -1,79 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import '../providers/app_providers.dart';
 import '../models/todo.dart';
 import '../models/task_session.dart';
-import '../widgets/ds/ds.dart';
-
-String _formatDuration(int seconds) {
-  final h = seconds ~/ 3600;
-  final m = (seconds % 3600) ~/ 60;
-  if (h > 0) {
-    return '${h}h ${m}m';
-  }
-  return '${m}m';
-}
-
-String _hours(double minutes) {
-  if (minutes >= 60) return '${(minutes / 60).toStringAsFixed(minutes >= 600 ? 0 : 1)}h';
-  return '${minutes.round()}m';
-}
-
-String _dateKey(DateTime dt) =>
-    '${dt.year.toString().padLeft(4, '0')}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
-
-/// Presentation-only roll-up of existing sessions and todos for a date range.
-/// Uses the same rules as TodoProvider's reports: focus time comes from
-/// sessions by date, and a task counts as completed on the day it was last updated.
-class _PeriodStats {
-  final int focusSeconds;
-  final int sessionCount;
-  final int tasksCompleted;
-  final int goalsCompleted;
-  final Map<String, int> categorySeconds;
-  final Set<String> activeDays;
-
-  _PeriodStats({
-    required this.focusSeconds,
-    required this.sessionCount,
-    required this.tasksCompleted,
-    required this.goalsCompleted,
-    required this.categorySeconds,
-    required this.activeDays,
-  });
-
-  factory _PeriodStats.of(List<TaskSession> sessions, List<Todo> todos, bool Function(String dateKey) inRange) {
-    var seconds = 0, count = 0;
-    final cats = <String, int>{};
-    final days = <String>{};
-    for (final s in sessions) {
-      if (!inRange(s.date)) continue;
-      seconds += s.durationSeconds;
-      count++;
-      days.add(s.date);
-      final c = s.category.isNotEmpty ? s.category : 'General';
-      cats[c] = (cats[c] ?? 0) + s.durationSeconds;
-    }
-    var tasks = 0, goals = 0;
-    for (final t in todos) {
-      if (!t.completed || !inRange(_dateKey(t.updatedAt))) continue;
-      if (t.isGoal) {
-        goals++;
-      } else {
-        tasks++;
-      }
-    }
-    return _PeriodStats(
-      focusSeconds: seconds,
-      sessionCount: count,
-      tasksCompleted: tasks,
-      goalsCompleted: goals,
-      categorySeconds: cats,
-      activeDays: days,
-    );
-  }
-}
+import '../utils/app_colors.dart';
 
 class TaskReportScreen extends StatefulWidget {
   const TaskReportScreen({super.key});
@@ -82,9 +14,22 @@ class TaskReportScreen extends StatefulWidget {
   State<TaskReportScreen> createState() => _TaskReportScreenState();
 }
 
-class _TaskReportScreenState extends State<TaskReportScreen> {
-  int _period = 0; // 0=Day, 1=Week, 2=Month, 3=Year, 4=All time
+class _TaskReportScreenState extends State<TaskReportScreen>
+    with SingleTickerProviderStateMixin {
+  late TabController _tabController;
   DateTime _selectedDate = DateTime.now();
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 2, vsync: this);
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
 
   void _previousDay() {
     setState(() {
@@ -110,45 +55,49 @@ class _TaskReportScreenState extends State<TaskReportScreen> {
     }
   }
 
+  String _formatDuration(int seconds) {
+    final h = seconds ~/ 3600;
+    final m = (seconds % 3600) ~/ 60;
+    if (h > 0) {
+      return '${h}h ${m}m';
+    }
+    return '${m}m';
+  }
+
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final todoProv = context.watch<TodoProvider>();
 
-    final List<Widget> content = switch (_period) {
-      0 => _buildDay(todoProv),
-      1 => _buildWeek(todoProv),
-      2 => _buildMonth(todoProv),
-      3 => _buildYear(todoProv),
-      _ => _buildAllTime(todoProv),
-    };
-
     return Scaffold(
-      appBar: AppBar(title: const Text('Reports')),
-      body: PageListView(
-        clearFab: false,
-        children: [
-          AppSegmented<int>(
-            segments: const {0: 'Day', 1: 'Week', 2: 'Month', 3: 'Year', 4: 'All'},
-            selected: _period,
-            onChanged: (v) => setState(() => _period = v),
+      appBar: AppBar(
+        title: const Text('Task Tracker & Reports'),
+        bottom: TabBar(
+          controller: _tabController,
+          indicatorSize: TabBarIndicatorSize.tab,
+          tabs: const [
+            Tab(icon: Icon(Icons.assessment_rounded, size: 20), text: 'Daily Report'),
+            Tab(icon: Icon(Icons.trending_up_rounded, size: 20), text: 'Improvement & Trends'),
+          ],
+        ),
+      ),
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 800),
+          child: TabBarView(
+            controller: _tabController,
+            children: [
+              _buildDailyReportTab(theme, todoProv),
+              _buildImprovementTab(theme, todoProv),
+            ],
           ),
-          const SizedBox(height: AppSpacing.md),
-          AnimatedSwitcher(
-            duration: AppMotion.medium,
-            child: Column(
-              key: ValueKey(_period),
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: content,
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
 
-  // ─── Day ───────────────────────────────────────────────────────────────────
-
-  List<Widget> _buildDay(TodoProvider todoProv) {
+  // ==================== 1. DAILY REPORT TAB ====================
+  Widget _buildDailyReportTab(ThemeData theme, TodoProvider todoProv) {
     final report = todoProv.getDailyReport(_selectedDate);
     final totalSeconds = report['totalSeconds'] as int;
     final completedTasks = report['completedTasks'] as List<Todo>;
@@ -156,444 +105,531 @@ class _TaskReportScreenState extends State<TaskReportScreen> {
     final categoryTime = report['categoryTime'] as Map<String, int>;
     final completionRate = report['completionRate'] as int;
     final daySessions = report['daySessions'] as List<TaskSession>;
+
     final isToday = DateUtils.isSameDay(_selectedDate, DateTime.now());
 
-    return [
-      DateNavigator(
-        label: isToday ? 'Today, ${DateFormat('MMM d').format(_selectedDate)}' : DateFormat('EEE, MMM d, yyyy').format(_selectedDate),
-        onPrevious: _previousDay,
-        onNext: _nextDay,
-        onTapLabel: _pickDate,
-      ),
-      const SizedBox(height: AppSpacing.sm),
-      StatRow(children: [
-        StatCard(
-          label: 'Focus time',
-          value: _formatDuration(totalSeconds),
-          caption: '${daySessions.length} ${daySessions.length == 1 ? 'session' : 'sessions'}',
-          icon: Icons.timer_outlined,
-        ),
-        StatCard(
-          label: 'Completion',
-          value: '$completionRate%',
-          caption: '${completedTasks.length} done · ${pendingTasks.length} open',
-          icon: Icons.task_alt_rounded,
-          tone: completionRate >= 70 ? StatusTone.success : StatusTone.warning,
-        ),
-      ]),
-      if (isToday) ...[
-        const SectionGap(),
-        _comparisonCard(todoProv, 0),
-      ],
-      if (categoryTime.isNotEmpty) ...[
-        const SectionGap(),
-        _categoryCard(categoryTime, totalSeconds),
-      ],
-      const SectionGap(),
-      SectionHeader(title: 'Completed', subtitle: '${completedTasks.length} on this day'),
-      if (completedTasks.isEmpty)
-        const EmptyState(
-          compact: true,
-          icon: Icons.task_alt_rounded,
-          title: 'Nothing completed',
-          subtitle: 'Tasks you finish on this day will show here.',
-        )
-      else
-        _taskList(completedTasks, isDone: true),
-      const SectionGap(),
-      SectionHeader(title: 'Still open', subtitle: '${pendingTasks.length} across all dates'),
-      if (pendingTasks.isEmpty)
-        const EmptyState(
-          compact: true,
-          icon: Icons.celebration_outlined,
-          title: 'All caught up',
-          subtitle: 'There are no open tasks or goals.',
-        )
-      else
-        _taskList(pendingTasks, isDone: false),
-    ];
-  }
-
-  // ─── Week (last 7 days, same window as the improvement comparison) ───────
-
-  List<Widget> _buildWeek(TodoProvider todoProv) {
-    final now = DateTime.now();
-    final days = List.generate(7, (i) => DateTime(now.year, now.month, now.day - 6 + i));
-    final keys = days.map(_dateKey).toSet();
-    final stats = _PeriodStats.of(todoProv.sessions, todoProv.todos, keys.contains);
-    final perDay = days.map((d) {
-      final k = _dateKey(d);
-      return todoProv.sessions.where((s) => s.date == k).fold<int>(0, (a, s) => a + s.durationSeconds) / 60.0;
-    }).toList();
-
-    return [
-      _summaryCard(
-        label: 'Last 7 days',
-        stats: stats,
-        caption: 'Avg ${_hours(stats.focusSeconds / 60 / 7)} a day',
-      ),
-      const SectionGap(),
-      _chartCard(
-        title: 'Focus time per day',
-        values: perDay,
-        labels: days.map((d) => DateFormat('E').format(d).substring(0, 1)).toList(),
-        highlight: 6,
-        semantics: 'Focus minutes per day for the last 7 days',
-      ),
-      const SectionGap(),
-      _comparisonCard(todoProv, 1),
-      if (stats.categorySeconds.isNotEmpty) ...[
-        const SectionGap(),
-        _categoryCard(stats.categorySeconds, stats.focusSeconds),
-      ],
-    ];
-  }
-
-  // ─── Month (this calendar month) ─────────────────────────────────────────
-
-  List<Widget> _buildMonth(TodoProvider todoProv) {
-    final now = DateTime.now();
-    final prefix = '${now.year}-${now.month.toString().padLeft(2, '0')}';
-    final daysInMonth = DateTime(now.year, now.month + 1, 0).day;
-    final stats = _PeriodStats.of(todoProv.sessions, todoProv.todos, (k) => k.startsWith(prefix));
-    final perDay = List<double>.filled(daysInMonth, 0);
-    for (final s in todoProv.sessions) {
-      if (!s.date.startsWith(prefix)) continue;
-      final d = int.tryParse(s.date.substring(8)) ?? 0;
-      if (d >= 1 && d <= daysInMonth) perDay[d - 1] += s.durationSeconds / 60.0;
-    }
-
-    return [
-      _summaryCard(
-        label: DateFormat('MMMM yyyy').format(now),
-        stats: stats,
-        caption: '${stats.activeDays.length} of ${now.day} days with focus time',
-      ),
-      const SectionGap(),
-      _chartCard(
-        title: 'Focus time per day',
-        values: perDay,
-        labels: List.generate(daysInMonth, (i) => (i == 0 || (i + 1) % 5 == 0) ? '${i + 1}' : ''),
-        highlight: now.day - 1,
-        disabled: {for (var i = now.day; i < daysInMonth; i++) i},
-        semantics: 'Focus minutes per day this month',
-      ),
-      const SectionGap(),
-      _comparisonCard(todoProv, 2),
-      if (stats.categorySeconds.isNotEmpty) ...[
-        const SectionGap(),
-        _categoryCard(stats.categorySeconds, stats.focusSeconds),
-      ],
-    ];
-  }
-
-  // ─── Year (this calendar year) ───────────────────────────────────────────
-
-  List<Widget> _buildYear(TodoProvider todoProv) {
-    final now = DateTime.now();
-    final prefix = '${now.year}-';
-    final stats = _PeriodStats.of(todoProv.sessions, todoProv.todos, (k) => k.startsWith(prefix));
-    final perMonth = List<double>.filled(12, 0);
-    for (final s in todoProv.sessions) {
-      if (!s.date.startsWith(prefix)) continue;
-      final m = int.tryParse(s.date.substring(5, 7)) ?? 0;
-      if (m >= 1 && m <= 12) perMonth[m - 1] += s.durationSeconds / 60.0;
-    }
-    final completedPerMonth = List<int>.filled(12, 0);
-    for (final t in todoProv.todos) {
-      if (t.completed && t.updatedAt.year == now.year) completedPerMonth[t.updatedAt.month - 1]++;
-    }
-    var best = -1;
-    for (var i = 0; i < 12; i++) {
-      if (perMonth[i] > 0 && (best < 0 || perMonth[i] > perMonth[best])) best = i;
-    }
-
-    return [
-      _summaryCard(
-        label: 'Year ${now.year}',
-        stats: stats,
-        caption: best >= 0
-            ? 'Most focused month: ${DateFormat('MMMM').format(DateTime(now.year, best + 1))}'
-            : '${stats.activeDays.length} days with focus time',
-      ),
-      const SectionGap(),
-      _chartCard(
-        title: 'Focus time per month',
-        values: perMonth,
-        labels: List.generate(12, (m) => DateFormat('MMMMM').format(DateTime(now.year, m + 1))),
-        highlight: now.month - 1,
-        disabled: {for (var m = now.month; m < 12; m++) m},
-        semantics: 'Focus minutes per month in ${now.year}',
-      ),
-      const SectionGap(),
-      _chartCard(
-        title: 'Tasks and goals completed per month',
-        values: completedPerMonth.map((v) => v.toDouble()).toList(),
-        labels: List.generate(12, (m) => DateFormat('MMMMM').format(DateTime(now.year, m + 1))),
-        highlight: now.month - 1,
-        disabled: {for (var m = now.month; m < 12; m++) m},
-        valueLabel: (v) => v.round().toString(),
-        semantics: 'Items completed per month in ${now.year}',
-      ),
-      if (stats.categorySeconds.isNotEmpty) ...[
-        const SectionGap(),
-        _categoryCard(stats.categorySeconds, stats.focusSeconds),
-      ],
-    ];
-  }
-
-  // ─── All time ─────────────────────────────────────────────────────────────
-
-  List<Widget> _buildAllTime(TodoProvider todoProv) {
-    final stats = _PeriodStats.of(todoProv.sessions, todoProv.todos, (_) => true);
-    final perDay = <String, int>{};
-    for (final s in todoProv.sessions) {
-      perDay[s.date] = (perDay[s.date] ?? 0) + s.durationSeconds;
-    }
-    MapEntry<String, int>? bestDay;
-    for (final e in perDay.entries) {
-      if (bestDay == null || e.value > bestDay.value) bestDay = e;
-    }
-    final bestDate = bestDay == null ? null : DateTime.tryParse(bestDay.key);
-
-    if (todoProv.sessions.isEmpty && todoProv.todos.isEmpty) {
-      return const [
-        EmptyState(
-          icon: Icons.insights_outlined,
-          title: 'No history yet',
-          subtitle: 'Track time on tasks and complete them to build your reports.',
-        ),
-      ];
-    }
-
-    return [
-      _summaryCard(label: 'All time', stats: stats, caption: '${stats.activeDays.length} days with focus time'),
-      const SectionGap(),
-      StatRow(children: [
-        StatCard(
-          label: 'Best day',
-          value: bestDay == null ? '—' : _formatDuration(bestDay.value),
-          caption: bestDate == null ? 'No sessions yet' : DateFormat('MMM d, yyyy').format(bestDate),
-          icon: Icons.emoji_events_outlined,
-          tone: StatusTone.success,
-        ),
-        StatCard(
-          label: 'Avg session',
-          value: stats.sessionCount == 0 ? '—' : _formatDuration(stats.focusSeconds ~/ stats.sessionCount),
-          caption: '${stats.sessionCount} sessions',
-          icon: Icons.av_timer_rounded,
-          tone: StatusTone.info,
-        ),
-      ]),
-      if (stats.categorySeconds.isNotEmpty) ...[
-        const SectionGap(),
-        _categoryCard(stats.categorySeconds, stats.focusSeconds),
-      ],
-    ];
-  }
-
-  // ─── Building blocks ──────────────────────────────────────────────────────
-
-  Widget _summaryCard({required String label, required _PeriodStats stats, String? caption}) {
-    return AppCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label, style: context.text.labelMedium?.copyWith(color: context.colors.textSecondary)),
-          const SizedBox(height: AppSpacing.xxs),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.baseline,
-            textBaseline: TextBaseline.alphabetic,
+    return ListView(
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+      children: [
+        // 1. Date Selector Bar
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+          decoration: BoxDecoration(
+            color: theme.cardTheme.color ?? theme.colorScheme.surface,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: theme.dividerColor.withValues(alpha: 0.2)),
+          ),
+          child: Row(
             children: [
-              Flexible(
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Text(_formatDuration(stats.focusSeconds), style: context.text.displaySmall),
+              IconButton(
+                visualDensity: VisualDensity.compact,
+                icon: const Icon(Icons.chevron_left_rounded),
+                tooltip: 'Previous Day',
+                onPressed: _previousDay,
+              ),
+              Expanded(
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(12),
+                  onTap: _pickDate,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.calendar_month_rounded, size: 16, color: AppColors.tasks),
+                        const SizedBox(width: 6),
+                        Flexible(
+                          child: Text(
+                            isToday
+                                ? 'Today • ${DateFormat('MMM d').format(_selectedDate)}'
+                                : DateFormat('EEE, MMM d').format(_selectedDate),
+                            style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        const Icon(Icons.arrow_drop_down_rounded, size: 18),
+                      ],
+                    ),
+                  ),
                 ),
               ),
-              const SizedBox(width: AppSpacing.xs),
-              Text('focused', style: context.text.bodyMedium?.copyWith(color: context.colors.textSecondary)),
+              IconButton(
+                visualDensity: VisualDensity.compact,
+                icon: const Icon(Icons.chevron_right_rounded),
+                tooltip: 'Next Day',
+                onPressed: _nextDay,
+              ),
             ],
           ),
-          if (caption != null) Text(caption, style: context.text.bodySmall),
-          const SizedBox(height: AppSpacing.md),
-          MetricStrip(metrics: [
-            Metric(value: '${stats.tasksCompleted}', label: 'tasks done', icon: Icons.task_alt_rounded),
-            Metric(value: '${stats.goalsCompleted}', label: 'goals done', icon: Icons.flag_outlined),
-            Metric(value: '${stats.sessionCount}', label: 'sessions', icon: Icons.timer_outlined),
-          ]),
-        ],
-      ),
-    );
-  }
+        ).animate().fadeIn(duration: 300.ms),
+        const SizedBox(height: 16),
 
-  Widget _chartCard({
-    required String title,
-    required List<double> values,
-    required List<String> labels,
-    int? highlight,
-    Set<int> disabled = const {},
-    String Function(double)? valueLabel,
-    required String semantics,
-  }) {
-    final empty = values.every((v) => v <= 0);
-    return AppCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(title, style: context.text.titleSmall),
-          const SizedBox(height: AppSpacing.md),
-          if (empty)
-            const EmptyState(
-              compact: true,
-              icon: Icons.bar_chart_rounded,
-              title: 'No activity in this period',
-              subtitle: 'Start a timer on a task to see it here.',
-            )
-          else
-            BarChart(
-              values: values,
-              labels: labels,
-              highlightIndex: highlight,
-              disabledIndices: disabled,
-              valueLabel: valueLabel ?? _hours,
-              height: 170,
-              semanticsLabel: semantics,
+        // 2. Summary Metric Cards Grid
+        Row(
+          children: [
+            Expanded(
+              child: _buildMetricCard(
+                theme: theme,
+                title: 'Total Tracked',
+                value: _formatDuration(totalSeconds),
+                subtitle: '${daySessions.length} sessions logged',
+                icon: Icons.timer_rounded,
+                color: AppColors.tasks,
+              ),
             ),
-        ],
-      ),
-    );
-  }
-
-  /// [horizon]: 0 = today vs yesterday, 1 = last 7 days vs prior 7, 2 = this month vs last.
-  Widget _comparisonCard(TodoProvider todoProv, int horizon) {
-    final comp = todoProv.getImprovementComparison();
-    late final String title, curLabel, prevLabel, curText, prevText;
-    late final double curValue, prevValue;
-    late final int pct, curDone, prevDone;
-    switch (horizon) {
-      case 0:
-        title = 'Compared with yesterday';
-        curLabel = 'Today';
-        prevLabel = 'Yesterday';
-        curValue = (comp['todayMinutes'] as int).toDouble();
-        prevValue = (comp['yesterdayMinutes'] as int).toDouble();
-        curText = '${comp['todayMinutes']}m';
-        prevText = '${comp['yesterdayMinutes']}m';
-        pct = comp['dayTimeChangePct'] as int;
-        curDone = comp['todayCompleted'] as int;
-        prevDone = comp['yesterdayCompleted'] as int;
-      case 1:
-        title = 'Compared with the 7 days before';
-        curLabel = 'Last 7 days';
-        prevLabel = 'Previous 7';
-        curValue = double.tryParse(comp['currentWeekHours'] as String) ?? 0;
-        prevValue = double.tryParse(comp['priorWeekHours'] as String) ?? 0;
-        curText = '${comp['currentWeekHours']}h';
-        prevText = '${comp['priorWeekHours']}h';
-        pct = comp['weekTimeChangePct'] as int;
-        curDone = comp['currentWeekCompleted'] as int;
-        prevDone = comp['priorWeekCompleted'] as int;
-      default:
-        title = 'Compared with last month';
-        curLabel = 'This month';
-        prevLabel = 'Last month';
-        curValue = double.tryParse(comp['thisMonthHours'] as String) ?? 0;
-        prevValue = double.tryParse(comp['prevMonthHours'] as String) ?? 0;
-        curText = '${comp['thisMonthHours']}h';
-        prevText = '${comp['prevMonthHours']}h';
-        pct = comp['monthTimeChangePct'] as int;
-        curDone = comp['thisMonthCompleted'] as int;
-        prevDone = comp['prevMonthCompleted'] as int;
-    }
-    final up = pct > 0;
-    final flat = pct == 0;
-
-    return AppCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(child: Text(title, style: context.text.titleSmall)),
-              StatusBadge(
-                label: flat ? 'No change' : '${up ? '+' : '−'}${pct.abs()}% focus',
-                tone: flat ? StatusTone.neutral : (up ? StatusTone.success : StatusTone.warning),
-                icon: flat ? Icons.remove_rounded : (up ? Icons.arrow_upward_rounded : Icons.arrow_downward_rounded),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _buildMetricCard(
+                theme: theme,
+                title: 'Completion Rate',
+                value: '$completionRate%',
+                subtitle: '${completedTasks.length} done / ${pendingTasks.length} pending',
+                icon: Icons.check_circle_rounded,
+                color: completionRate >= 70 ? AppColors.success : AppColors.warning,
               ),
-            ],
-          ),
-          const SizedBox(height: AppSpacing.md),
-          ComparisonBars(
-            currentLabel: curLabel,
-            currentValue: curValue,
-            currentText: curText,
-            previousLabel: prevLabel,
-            previousValue: prevValue,
-            previousText: prevText,
-          ),
-          const SizedBox(height: AppSpacing.sm),
-          Text('Completed: $curDone ${curLabel.toLowerCase()} · $prevDone ${prevLabel.toLowerCase()}', style: context.text.bodySmall),
-        ],
-      ),
-    );
-  }
+            ),
+          ],
+        ).animate().fadeIn(delay: 100.ms),
+        const SizedBox(height: 16),
 
-  Widget _categoryCard(Map<String, int> categoryTime, int totalSeconds) {
-    final entries = categoryTime.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
-    return AppCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('Time by category', style: context.text.titleSmall),
-          const SizedBox(height: AppSpacing.md),
-          for (final e in entries) ...[
-            Row(
+        // 3. Category Breakdown Card
+        if (categoryTime.isNotEmpty) ...[
+          Container(
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              color: theme.cardTheme.color ?? theme.colorScheme.surface,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: theme.dividerColor.withValues(alpha: 0.2)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(categoryIcon(e.key), size: AppSizes.iconSm, color: context.colors.textSecondary),
-                const SizedBox(width: AppSpacing.xs),
-                Expanded(child: Text(e.key, style: context.text.labelLarge, maxLines: 1, overflow: TextOverflow.ellipsis)),
-                Text(
-                  '${_formatDuration(e.value)} · ${totalSeconds > 0 ? (e.value * 100 / totalSeconds).round() : 0}%',
-                  style: context.text.labelMedium?.copyWith(color: context.colors.textSecondary),
+                Row(
+                  children: [
+                    const Icon(Icons.pie_chart_rounded, color: AppColors.primary, size: 18),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Time by Category',
+                      style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+                    ),
+                  ],
                 ),
+                const SizedBox(height: 14),
+                ...categoryTime.entries.map((e) {
+                  final pct = totalSeconds > 0 ? (e.value / totalSeconds) : 0.0;
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(e.key, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                            Text(_formatDuration(e.value),
+                                style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13)),
+                          ],
+                        ),
+                        const SizedBox(height: 5),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: LinearProgressIndicator(
+                            value: pct,
+                            minHeight: 6,
+                            backgroundColor: theme.dividerColor.withValues(alpha: 0.15),
+                            valueColor: const AlwaysStoppedAnimation<Color>(AppColors.tasks),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }),
               ],
             ),
-            const SizedBox(height: AppSpacing.xs),
-            LinearMeter(value: totalSeconds > 0 ? e.value / totalSeconds : 0),
-            if (e.key != entries.last.key) const SizedBox(height: AppSpacing.md),
-          ],
+          ).animate().fadeIn(delay: 150.ms),
+          const SizedBox(height: 16),
+        ],
+
+        // 4. Tasks Completed (Done)
+        _buildSectionHeader(theme, 'Tasks Completed (${completedTasks.length})', Icons.task_alt_rounded, AppColors.success),
+        const SizedBox(height: 8),
+        if (completedTasks.isEmpty)
+          _buildEmptyText('No completed tasks recorded for this date.')
+        else
+          ...completedTasks.map((t) => _buildTaskItem(theme, t, isDone: true)),
+        const SizedBox(height: 18),
+
+        // 5. Tasks Not Done (Pending)
+        _buildSectionHeader(theme, 'Tasks Not Done / Pending (${pendingTasks.length})', Icons.pending_actions_rounded, AppColors.warning),
+        const SizedBox(height: 8),
+        if (pendingTasks.isEmpty)
+          _buildEmptyText('All tasks are completed! Great job! 🎉')
+        else
+          ...pendingTasks.map((t) => _buildTaskItem(theme, t, isDone: false)),
+        const SizedBox(height: 24),
+      ],
+    );
+  }
+
+  // ==================== 2. IMPROVEMENT COMPARISON TAB ====================
+  Widget _buildImprovementTab(ThemeData theme, TodoProvider todoProv) {
+    final comp = todoProv.getImprovementComparison();
+
+    final todayMin = comp['todayMinutes'] as int;
+    final yesterdayMin = comp['yesterdayMinutes'] as int;
+    final todayDone = comp['todayCompleted'] as int;
+    final yesterdayDone = comp['yesterdayCompleted'] as int;
+    final dayChangePct = comp['dayTimeChangePct'] as int;
+
+    final curWeekHours = comp['currentWeekHours'] as String;
+    final priorWeekHours = comp['priorWeekHours'] as String;
+    final curWeekDailyAvg = comp['currentWeekDailyAvgMinutes'] as int;
+    final curWeekDone = comp['currentWeekCompleted'] as int;
+    final priorWeekDone = comp['priorWeekCompleted'] as int;
+    final weekChangePct = comp['weekTimeChangePct'] as int;
+
+    final thisMonthHours = comp['thisMonthHours'] as String;
+    final prevMonthHours = comp['prevMonthHours'] as String;
+    final thisMonthDone = comp['thisMonthCompleted'] as int;
+    final prevMonthDone = comp['prevMonthCompleted'] as int;
+    final monthChangePct = comp['monthTimeChangePct'] as int;
+
+    return ListView(
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+      children: [
+        // 1. Day-to-Day Comparison Card
+        _buildComparisonCard(
+          theme: theme,
+          horizon: 'Day-to-Day Improvement',
+          period1Label: 'Today',
+          period1Value: '${todayMin}m tracked',
+          period1Extra: '$todayDone tasks completed',
+          period2Label: 'Yesterday',
+          period2Value: '${yesterdayMin}m tracked',
+          period2Extra: '$yesterdayDone tasks completed',
+          pctChange: dayChangePct,
+          icon: Icons.today_rounded,
+          accentColor: AppColors.tasks,
+        ).animate().fadeIn(delay: 50.ms),
+        const SizedBox(height: 16),
+
+        // 2. Week-to-Week Comparison Card
+        _buildComparisonCard(
+          theme: theme,
+          horizon: 'Week-to-Week Improvement',
+          period1Label: 'This Week',
+          period1Value: '${curWeekHours}h total',
+          period1Extra: 'Avg ${curWeekDailyAvg}m/day • $curWeekDone tasks',
+          period2Label: 'Last Week',
+          period2Value: '${priorWeekHours}h total',
+          period2Extra: '$priorWeekDone tasks completed',
+          pctChange: weekChangePct,
+          icon: Icons.view_week_rounded,
+          accentColor: AppColors.primary,
+        ).animate().fadeIn(delay: 150.ms),
+        const SizedBox(height: 16),
+
+        // 3. Month-to-Month Comparison Card
+        _buildComparisonCard(
+          theme: theme,
+          horizon: 'Month-to-Month Improvement',
+          period1Label: 'This Month',
+          period1Value: '${thisMonthHours}h tracked',
+          period1Extra: '$thisMonthDone tasks completed',
+          period2Label: 'Last Month',
+          period2Value: '${prevMonthHours}h tracked',
+          period2Extra: '$prevMonthDone tasks completed',
+          pctChange: monthChangePct,
+          icon: Icons.calendar_view_month_rounded,
+          accentColor: AppColors.secondary,
+        ).animate().fadeIn(delay: 250.ms),
+        const SizedBox(height: 24),
+      ],
+    );
+  }
+
+  // ==================== HELPER WIDGETS ====================
+
+  Widget _buildMetricCard({
+    required ThemeData theme,
+    required String title,
+    required String value,
+    required String subtitle,
+    required IconData icon,
+    required Color color,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: theme.cardTheme.color ?? theme.colorScheme.surface,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: theme.dividerColor.withValues(alpha: 0.2)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(icon, color: color, size: 16),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  title,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            value,
+            style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            subtitle,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.55),
+              fontSize: 11,
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Widget _taskList(List<Todo> tasks, {required bool isDone}) {
-    final children = <Widget>[];
-    for (var i = 0; i < tasks.length; i++) {
-      final task = tasks[i];
-      if (i > 0) children.add(const Divider(indent: 56));
-      children.add(ListTile(
-        leading: Icon(
-          isDone ? Icons.check_circle_rounded : Icons.radio_button_unchecked_rounded,
-          color: isDone ? context.colors.success : context.colors.textSecondary,
-          semanticLabel: isDone ? 'Completed' : 'Open',
+  Widget _buildComparisonCard({
+    required ThemeData theme,
+    required String horizon,
+    required String period1Label,
+    required String period1Value,
+    required String period1Extra,
+    required String period2Label,
+    required String period2Value,
+    required String period2Extra,
+    required int pctChange,
+    required IconData icon,
+    required Color accentColor,
+  }) {
+    final isPositive = pctChange >= 0;
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: theme.cardTheme.color ?? theme.colorScheme.surface,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: theme.dividerColor.withValues(alpha: 0.2)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: accentColor.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Icon(icon, color: accentColor, size: 18),
+                  ),
+                  const SizedBox(width: 10),
+                  Text(
+                    horizon,
+                    style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
+                  ),
+                ],
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: (isPositive ? AppColors.success : AppColors.error).withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      isPositive ? Icons.arrow_upward_rounded : Icons.arrow_downward_rounded,
+                      size: 14,
+                      color: isPositive ? AppColors.success : AppColors.error,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      '${pctChange.abs()}%',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w900,
+                        color: isPositive ? AppColors.success : AppColors.error,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          Row(
+            children: [
+              // Current Period
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: accentColor.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: accentColor.withValues(alpha: 0.2)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(period1Label, style: TextStyle(color: accentColor, fontWeight: FontWeight.w700, fontSize: 12)),
+                      const SizedBox(height: 4),
+                      Text(period1Value, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
+                      const SizedBox(height: 2),
+                      Text(period1Extra, style: theme.textTheme.bodySmall?.copyWith(fontSize: 11)),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+
+              // Prior Period
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.surface,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: theme.dividerColor.withValues(alpha: 0.2)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(period2Label,
+                          style: TextStyle(
+                              color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                              fontWeight: FontWeight.w700,
+                              fontSize: 12)),
+                      const SizedBox(height: 4),
+                      Text(period2Value, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+                      const SizedBox(height: 2),
+                      Text(period2Extra, style: theme.textTheme.bodySmall?.copyWith(fontSize: 11)),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSectionHeader(ThemeData theme, String title, IconData icon, Color color) {
+    return Row(
+      children: [
+        Icon(icon, color: color, size: 18),
+        const SizedBox(width: 8),
+        Text(
+          title,
+          style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800),
         ),
-        title: Text(
-          task.title,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(decoration: isDone ? TextDecoration.lineThrough : null),
-        ),
-        subtitle: Text([
-          task.isGoal ? 'Goal' : 'Task',
-          if (task.category.isNotEmpty) task.category,
-        ].join(' · ')),
-        trailing: task.timeSpentSeconds > 0
-            ? StatusBadge(label: _formatDuration(task.timeSpentSeconds), icon: Icons.timer_outlined, outlined: true)
-            : null,
-      ));
-    }
-    return AppCard(padding: const EdgeInsets.symmetric(vertical: AppSpacing.xxs), child: Column(children: children));
+      ],
+    );
+  }
+
+  Widget _buildEmptyText(String msg) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Text(
+        msg,
+        style: TextStyle(fontSize: 13, color: Colors.grey.withValues(alpha: 0.8), fontStyle: FontStyle.italic),
+      ),
+    );
+  }
+
+  Widget _buildTaskItem(ThemeData theme, Todo task, {required bool isDone}) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: theme.cardTheme.color ?? theme.colorScheme.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: theme.dividerColor.withValues(alpha: 0.2)),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            isDone ? Icons.check_circle_rounded : Icons.radio_button_unchecked_rounded,
+            color: isDone ? AppColors.success : AppColors.warning,
+            size: 20,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  task.title,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 14,
+                    decoration: isDone ? TextDecoration.lineThrough : null,
+                  ),
+                ),
+                if (task.category.isNotEmpty)
+                  Text(
+                    task.category,
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.primary.withValues(alpha: 0.8),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          if (task.timeSpentSeconds > 0)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: AppColors.tasks.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.timer_outlined, size: 12, color: AppColors.tasks),
+                  const SizedBox(width: 4),
+                  Text(
+                    _formatDuration(task.timeSpentSeconds),
+                    style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.tasks,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
   }
 }

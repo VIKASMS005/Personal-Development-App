@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:table_calendar/table_calendar.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:intl/intl.dart';
 import '../providers/app_providers.dart';
 import '../models/calendar_event.dart';
+import '../utils/app_colors.dart';
 import '../utils/app_time_picker.dart';
-import '../widgets/ds/ds.dart';
+import '../widgets/empty_state.dart';
+import '../widgets/animated_card.dart';
 
 class CalendarScreen extends StatefulWidget {
   const CalendarScreen({super.key});
@@ -29,7 +32,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Calendar & Events')),
       floatingActionButton: FloatingActionButton(
-        tooltip: 'Add event',
+        backgroundColor: AppColors.calendar,
+        foregroundColor: Colors.white,
         onPressed: () => _addEvent(auth.uid),
         child: const Icon(Icons.add_rounded),
       ),
@@ -58,16 +62,15 @@ class _CalendarScreenState extends State<CalendarScreen> {
                 onPageChanged: (focused) => _focusedDay = focused,
                 calendarStyle: CalendarStyle(
                   todayDecoration: BoxDecoration(
-                    color: context.scheme.primaryContainer,
+                    color: AppColors.calendar.withValues(alpha: 0.3),
                     shape: BoxShape.circle,
                   ),
-                  todayTextStyle: TextStyle(color: context.scheme.onPrimaryContainer, fontWeight: FontWeight.w700),
-                  selectedDecoration: BoxDecoration(
-                    color: context.scheme.primary,
+                  selectedDecoration: const BoxDecoration(
+                    color: AppColors.calendar,
                     shape: BoxShape.circle,
                   ),
-                  markerDecoration: BoxDecoration(
-                    color: context.colors.textSecondary,
+                  markerDecoration: const BoxDecoration(
+                    color: AppColors.primary,
                     shape: BoxShape.circle,
                   ),
                   markersMaxCount: 1,
@@ -76,24 +79,24 @@ class _CalendarScreenState extends State<CalendarScreen> {
                   formatButtonVisible: true,
                   titleCentered: true,
                   formatButtonDecoration: BoxDecoration(
-                    border: Border.all(color: context.colors.border),
-                    borderRadius: AppRadius.smAll,
+                    color: AppColors.calendar.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(12),
                   ),
-                  formatButtonTextStyle: TextStyle(
-                    color: context.colors.textPrimary,
+                  formatButtonTextStyle: const TextStyle(
+                    color: AppColors.calendar,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
                 eventLoader: calProvider.getEventsForDay,
               ),
-            ),
+            ).animate().fadeIn().slideY(begin: 0.05),
 
             const SizedBox(height: 20),
 
             Text(
               'Events on ${DateFormat('MMMM dd, yyyy').format(_selectedDay)}',
               style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-            ),
+            ).animate().fadeIn(delay: 80.ms),
 
             const SizedBox(height: 12),
 
@@ -102,6 +105,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
                 icon: Icons.event_rounded,
                 title: 'No events scheduled',
                 subtitle: 'Tap + to schedule an event or milestone',
+                iconColor: AppColors.calendar,
               )
             else
               ...dayEvents.asMap().entries.map((entry) {
@@ -109,12 +113,25 @@ class _CalendarScreenState extends State<CalendarScreen> {
                 final diff = e.dateTime.difference(DateTime.now());
                 final timeStr = DateFormat('hh:mm a').format(e.dateTime);
 
-                return Padding(
+                return AnimatedListItem(
+                  index: entry.key,
+                  child: Padding(
                     padding: const EdgeInsets.only(bottom: 10),
                     child: AppCard(
+                      accentColor: AppColors.calendar,
                       child: Row(
                         children: [
-                          const IconBadge(icon: Icons.event_outlined),
+                          Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: AppColors.calendar.withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: const Icon(
+                              Icons.event_rounded,
+                              color: AppColors.calendar,
+                            ),
+                          ),
                           const SizedBox(width: 14),
                           Expanded(
                             child: Column(
@@ -129,15 +146,31 @@ class _CalendarScreenState extends State<CalendarScreen> {
                               ],
                             ),
                           ),
-                          StatusBadge(
-                            label: diff.isNegative ? 'Passed' : _formatDuration(diff),
-                            tone: diff.isNegative ? StatusTone.neutral : StatusTone.primary,
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: diff.isNegative
+                                  ? AppColors.error.withValues(alpha: 0.12)
+                                  : AppColors.success.withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              diff.isNegative ? 'Passed' : _formatDuration(diff),
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: diff.isNegative ? AppColors.error : AppColors.success,
+                              ),
+                            ),
                           ),
                           IconButton(
                             icon: Icon(
                               Icons.delete_outline_rounded,
                               size: 18,
-                              color: context.colors.textSecondary,
+                              color: AppColors.error.withValues(alpha: 0.7),
                             ),
                             onPressed: () async {
                               final confirmed = await showDialog<bool>(
@@ -152,8 +185,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
                                     ),
                                     FilledButton(
                                       style: FilledButton.styleFrom(
-                                        backgroundColor: context.colors.error,
-                                        foregroundColor: context.scheme.onError,
+                                        backgroundColor: AppColors.error,
+                                        foregroundColor: Colors.white,
                                       ),
                                       onPressed: () => Navigator.pop(ctx, true),
                                       child: const Text('Yes, Delete'),
@@ -169,6 +202,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
                         ],
                       ),
                     ),
+                  ),
                 );
               }),
           ],

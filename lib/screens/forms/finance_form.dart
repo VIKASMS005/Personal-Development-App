@@ -1,20 +1,21 @@
 import 'package:flutter/material.dart';
 import '../../models/finance_transaction.dart';
-import 'package:intl/intl.dart';
-import '../../widgets/ds/ds.dart';
+import '../../utils/app_colors.dart';
 
 class FinanceForm extends StatefulWidget {
   final FinanceTransaction? initial;
   final DateTime? defaultDate;
   const FinanceForm({super.key, this.initial, this.defaultDate});
 
-  static Future<FinanceTransaction?> show(BuildContext context, {FinanceTransaction? initial, DateTime? defaultDate}) =>
-      showModalBottomSheet<FinanceTransaction?>(
-        context: context,
-        isScrollControlled: true,
-        useSafeArea: true,
-        builder: (_) => FinanceForm(initial: initial, defaultDate: defaultDate),
-      );
+  static Future<FinanceTransaction?> show(BuildContext context, {FinanceTransaction? initial, DateTime? defaultDate}) {
+    return showDialog<FinanceTransaction?>(
+      context: context,
+      builder: (_) => Dialog(
+        insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+        child: FinanceForm(initial: initial, defaultDate: defaultDate),
+      ),
+    );
+  }
 
   @override
   State<FinanceForm> createState() => _FinanceFormState();
@@ -83,61 +84,106 @@ class _FinanceFormState extends State<FinanceForm> {
   @override
   Widget build(BuildContext context) {
     final isEdit = widget.initial != null;
-    final categories = _categories.contains(_category) ? _categories : [..._categories, _category];
+    final theme = Theme.of(context);
 
-    return SheetScaffold(
-      title: isEdit ? 'Edit entry' : 'New entry',
-      footer: FilledButton(
-        onPressed: _save,
-        style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(AppSizes.buttonHeight)),
-        child: Text(isEdit ? 'Save changes' : (_isExpense ? 'Add expense' : 'Add income')),
-      ),
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
       child: Form(
         key: _form,
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            AppSegmented<bool>(
-              segments: const {true: 'Expense', false: 'Income'},
-              icons: const {true: Icons.north_east_rounded, false: Icons.south_west_rounded},
-              selected: _isExpense,
-              onChanged: (v) => setState(() => _isExpense = v),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  isEdit ? 'Edit Transaction' : 'New Transaction',
+                  style: theme.textTheme.titleLarge,
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close_rounded),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ],
             ),
-            const SizedBox(height: AppSpacing.lg),
-            TextFormField(
-              controller: _amountC,
-              autofocus: !isEdit,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              textInputAction: TextInputAction.next,
-              style: context.text.titleLarge,
-              decoration: const InputDecoration(
-                labelText: 'Amount',
-                hintText: '0.00',
-                prefixText: '₹ ',
-              ),
-              validator: (v) {
-                final n = double.tryParse(v?.trim() ?? '');
-                if (n == null) return 'Enter an amount, e.g. 250';
-                if (n == 0) return 'Amount can\'t be zero';
-                return null;
-              },
+            const SizedBox(height: 16),
+            // Expense / Income Toggle
+            Row(
+              children: [
+                Expanded(
+                  child: ChoiceChip(
+                    avatar: const Icon(Icons.arrow_downward_rounded, size: 16, color: AppColors.error),
+                    label: const Center(child: Text('Expense')),
+                    selected: _isExpense,
+                    selectedColor: AppColors.error.withValues(alpha: 0.15),
+                    labelStyle: TextStyle(
+                      color: _isExpense ? AppColors.error : null,
+                      fontWeight: _isExpense ? FontWeight.w700 : FontWeight.w500,
+                    ),
+                    onSelected: (val) {
+                      if (val) setState(() => _isExpense = true);
+                    },
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ChoiceChip(
+                    avatar: const Icon(Icons.arrow_upward_rounded, size: 16, color: AppColors.success),
+                    label: const Center(child: Text('Income')),
+                    selected: !_isExpense,
+                    selectedColor: AppColors.success.withValues(alpha: 0.15),
+                    labelStyle: TextStyle(
+                      color: !_isExpense ? AppColors.success : null,
+                      fontWeight: !_isExpense ? FontWeight.w700 : FontWeight.w500,
+                    ),
+                    onSelected: (val) {
+                      if (val) setState(() => _isExpense = false);
+                    },
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: AppSpacing.md),
+            const SizedBox(height: 16),
             TextFormField(
               controller: _titleC,
-              textCapitalization: TextCapitalization.sentences,
-              decoration: InputDecoration(
-                labelText: 'Description',
-                hintText: _isExpense ? 'e.g. Groceries' : 'e.g. Salary',
+              decoration: const InputDecoration(
+                labelText: 'Title / Description',
+                hintText: 'e.g. Monthly Grocery, Client Payment',
+                prefixIcon: Icon(Icons.title_rounded),
               ),
-              validator: (v) => v == null || v.trim().isEmpty ? 'Please add a short description' : null,
+              validator: (v) => v == null || v.trim().isEmpty ? 'Required' : null,
             ),
-            const SizedBox(height: AppSpacing.md),
-            PickerField(
-              label: 'Date',
-              value: DateFormat('EEE, MMM d, yyyy').format(_date),
-              icon: Icons.calendar_today_outlined,
-              onTap: () async {
+            const SizedBox(height: 14),
+            TextFormField(
+              controller: _amountC,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                labelText: 'Amount (₹)',
+                hintText: '0.00',
+                prefixIcon: Icon(Icons.currency_rupee_rounded),
+              ),
+              validator: (v) => (v == null || v.trim().isEmpty || double.tryParse(v.trim()) == null)
+                  ? 'Enter a valid amount'
+                  : null,
+            ),
+            const SizedBox(height: 14),
+            DropdownButtonFormField<String>(
+              initialValue: _category,
+              decoration: const InputDecoration(
+                labelText: 'Category',
+                prefixIcon: Icon(Icons.category_rounded),
+              ),
+              items: _categories
+                  .map((c) => DropdownMenuItem(value: c, child: Text(c)))
+                  .toList(),
+              onChanged: (v) => setState(() => _category = v ?? 'General'),
+            ),
+            const SizedBox(height: 14),
+            OutlinedButton.icon(
+              icon: const Icon(Icons.calendar_today_rounded, size: 18),
+              label: Text('Date: ${_date.toLocal().toString().split(' ')[0]}'),
+              onPressed: () async {
                 final d = await showDatePicker(
                   context: context,
                   initialDate: _date,
@@ -147,21 +193,14 @@ class _FinanceFormState extends State<FinanceForm> {
                 if (d != null) setState(() => _date = d);
               },
             ),
-            const SizedBox(height: AppSpacing.lg),
-            const FieldLabel('Category'),
-            ChoiceWrap<String>(
-              options: categories,
-              selected: _category,
-              labelOf: (c) => c,
-              onSelected: (c) => setState(() => _category = c),
-            ),
-            const SizedBox(height: AppSpacing.lg),
-            TextFormField(
-              controller: _noteC,
-              minLines: 1,
-              maxLines: 3,
-              textCapitalization: TextCapitalization.sentences,
-              decoration: const InputDecoration(labelText: 'Note (optional)'),
+            const SizedBox(height: 24),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                icon: const Icon(Icons.check_rounded),
+                label: Text(isEdit ? 'Save Changes' : 'Record Transaction'),
+                onPressed: _save,
+              ),
             ),
           ],
         ),

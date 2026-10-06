@@ -218,8 +218,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
+  // The rest of the app uses the original theme; this screen keeps the
+  // redesigned look, so it supplies the new theme for its own subtree.
   @override
   Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Theme(
+      data: dark ? AppTheme.dark() : AppTheme.light(),
+      child: Builder(builder: _buildScreen),
+    );
+  }
+
+  Widget _buildScreen(BuildContext context) {
     final profile = context.watch<ProfileProvider>().profile;
     final themeProvider = context.watch<ThemeProvider>();
     final auth = context.watch<AuthProvider>();

@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
-import '../models/habit.dart';
 import '../providers/app_providers.dart';
-import '../widgets/ds/ds.dart';
+import '../utils/app_colors.dart';
+import '../widgets/empty_state.dart';
+import '../widgets/animated_card.dart';
 import 'forms/habit_form.dart';
 
 class HabitsScreen extends StatelessWidget {
@@ -17,218 +18,221 @@ class HabitsScreen extends StatelessWidget {
     });
   }
 
-  Future<void> _add(BuildContext context, AuthProvider auth, HabitProvider habitProvider) async {
-    final h = await HabitForm.show(context);
-    if (h != null && auth.uid != null) {
-      h.uid = auth.uid!;
-      await habitProvider.addHabit(h);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final auth = context.watch<AuthProvider>();
     final habitProvider = context.watch<HabitProvider>();
     final habits = habitProvider.habits;
     final last7Days = _getLast7Days();
     final todayStr = DateFormat('yyyy-MM-dd').format(DateTime.now());
-    final doneToday = habits.where((h) => h.history[todayStr] ?? false).length;
-    final bestStreak = habits.fold<int>(0, (m, h) => h.streak > m ? h.streak : m);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Habits')),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _add(context, auth, habitProvider),
-        icon: const Icon(Icons.add_rounded),
-        label: const Text('Add habit'),
+      appBar: AppBar(
+        title: const Text('Habits & Streaks'),
       ),
-      body: habits.isEmpty
-          ? EmptyState(
-              icon: Icons.local_fire_department_outlined,
-              title: 'No habits yet',
-              subtitle: 'Start with one small daily action and build a streak.',
-              action: FilledButton(onPressed: () => _add(context, auth, habitProvider), child: const Text('Add a habit')),
-            )
-          : PageListView(
-              children: [
-                StatRow(children: [
-                  StatCard(
-                    label: 'Done today',
-                    value: '$doneToday',
-                    unit: '/ ${habits.length}',
-                    icon: Icons.check_circle_outline_rounded,
-                    tone: doneToday == habits.length ? StatusTone.success : StatusTone.primary,
-                  ),
-                  StatCard(
-                    label: 'Best streak',
-                    value: '$bestStreak',
-                    unit: bestStreak == 1 ? 'day' : 'days',
-                    icon: Icons.local_fire_department_outlined,
-                    tone: StatusTone.warning,
-                  ),
-                ]),
-                const SectionGap(),
-                const SectionHeader(title: 'Your habits', subtitle: 'Tap a day to mark it done or undo it.'),
-                for (final h in habits) ...[
-                  _HabitCard(
-                    habit: h,
-                    days: last7Days,
-                    todayStr: todayStr,
-                    onToggle: (d) => habitProvider.toggleDay(h, d),
-                    onEdit: () async {
-                      final edited = await HabitForm.show(context, initial: h);
-                      if (edited != null) {
-                        await habitProvider.updateHabit(edited);
-                      }
-                    },
-                    onDelete: () async {
-                      final ok = await ConfirmDialog.show(
-                        context,
-                        title: 'Delete habit?',
-                        message: '"${h.title}" and its history will be removed.',
-                        confirmLabel: 'Delete',
-                        destructive: true,
-                      );
-                      if (ok) {
-                        await habitProvider.deleteHabit(h.id);
-                      }
-                    },
-                  ),
-                  const SizedBox(height: AppSpacing.sm),
-                ],
-              ],
-            ),
-    );
-  }
-}
+      floatingActionButton: FloatingActionButton(
+        backgroundColor: AppColors.habits,
+        foregroundColor: Colors.white,
+        onPressed: () async {
+          final h = await HabitForm.show(context);
+          if (h != null && auth.uid != null) {
+            h.uid = auth.uid!;
+            await habitProvider.addHabit(h);
+          }
+        },
+        child: const Icon(Icons.add_rounded),
+      ),
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 800),
+          child: habits.isEmpty
+              ? EmptyState(
+                  icon: Icons.local_fire_department_rounded,
+                  title: 'No habits yet',
+                  subtitle: 'Start small and build unstoppable daily streaks',
+                  iconColor: AppColors.habits,
+                )
+              : ListView.builder(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 80),
+              itemCount: habits.length,
+              itemBuilder: (context, index) {
+                final h = habits[index];
+                final isDoneToday = h.history[todayStr] ?? false;
 
-class _HabitCard extends StatelessWidget {
-  final Habit habit;
-  final List<String> days;
-  final String todayStr;
-  final ValueChanged<String> onToggle;
-  final VoidCallback onEdit;
-  final VoidCallback onDelete;
-
-  const _HabitCard({
-    required this.habit,
-    required this.days,
-    required this.todayStr,
-    required this.onToggle,
-    required this.onEdit,
-    required this.onDelete,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final h = habit;
-    final colors = context.colors;
-    final isDoneToday = h.history[todayStr] ?? false;
-
-    return AppCard(
-      padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.sm, AppSpacing.xxs, AppSpacing.md),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(h.title, style: context.text.titleSmall, maxLines: 2, overflow: TextOverflow.ellipsis),
-                    const SizedBox(height: AppSpacing.xxs),
-                    Wrap(
-                      spacing: AppSpacing.xs - 2,
-                      runSpacing: AppSpacing.xxs,
-                      children: [
-                        StatusBadge(
-                          label: '${h.streak} day streak',
-                          icon: Icons.local_fire_department_outlined,
-                          tone: h.streak > 0 ? StatusTone.warning : StatusTone.neutral,
-                        ),
-                        StatusBadge(label: h.frequency == HabitFrequency.daily ? 'Daily' : 'Weekly', outlined: true),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              PopupMenuButton<String>(
-                tooltip: 'More actions',
-                icon: const Icon(Icons.more_vert_rounded),
-                onSelected: (v) => v == 'edit' ? onEdit() : onDelete(),
-                itemBuilder: (_) => [
-                  const PopupMenuItem(value: 'edit', child: Text('Edit')),
-                  PopupMenuItem(value: 'delete', child: Text('Delete', style: TextStyle(color: colors.error))),
-                ],
-              ),
-            ],
-          ),
-          const SizedBox(height: AppSpacing.sm),
-          Padding(
-            padding: const EdgeInsets.only(right: AppSpacing.sm),
-            child: Row(
-              children: days.map((dStr) {
-                final isDone = h.history[dStr] ?? false;
-                final dt = DateTime.parse(dStr);
-                final isToday = dStr == todayStr;
-                return Expanded(
-                  child: Semantics(
-                    button: true,
-                    checked: isDone,
-                    label: '${DateFormat('EEEE').format(dt)}${isToday ? ', today' : ''}',
-                    excludeSemantics: true,
-                    child: InkWell(
-                      onTap: () => onToggle(dStr),
-                      borderRadius: AppRadius.smAll,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: AppSpacing.xxs),
-                        child: Column(
-                          children: [
-                            Text(
-                              DateFormat('E').format(dt).substring(0, 1),
-                              style: context.text.labelSmall?.copyWith(
-                                color: isToday ? colors.textPrimary : colors.textSecondary,
-                                fontWeight: isToday ? FontWeight.w700 : null,
-                              ),
-                            ),
-                            const SizedBox(height: AppSpacing.xxs),
-                            AnimatedContainer(
-                              duration: AppMotion.fast,
-                              width: 32,
-                              height: 32,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: isDone ? context.scheme.primary : colors.surfaceMuted,
-                                border: Border.all(
-                                  color: isToday ? context.scheme.primary : (isDone ? context.scheme.primary : colors.border),
-                                  width: isToday ? 2 : 1,
+                return AnimatedListItem(
+                  index: index,
+                  child: Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: AppCard(
+                      accentColor: isDoneToday ? AppColors.success : AppColors.habits,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              // Daily Checkbox Button
+                              GestureDetector(
+                                onTap: () {
+                                  habitProvider.toggleDay(h, todayStr);
+                                },
+                                child: AnimatedContainer(
+                                  duration: const Duration(milliseconds: 250),
+                                  width: 44,
+                                  height: 44,
+                                  decoration: BoxDecoration(
+                                    color: isDoneToday
+                                        ? AppColors.success.withValues(alpha: 0.15)
+                                        : AppColors.habits.withValues(alpha: 0.08),
+                                    borderRadius: BorderRadius.circular(14),
+                                    border: Border.all(
+                                      color: isDoneToday
+                                          ? AppColors.success
+                                          : AppColors.habits.withValues(alpha: 0.3),
+                                      width: 2,
+                                    ),
+                                  ),
+                                  child: Icon(
+                                    isDoneToday ? Icons.check_rounded : Icons.circle_outlined,
+                                    color: isDoneToday ? AppColors.success : AppColors.habits,
+                                    size: 22,
+                                  ),
                                 ),
                               ),
-                              child: isDone ? Icon(Icons.check_rounded, size: AppSizes.iconSm, color: context.scheme.onPrimary) : null,
-                            ),
-                          ],
-                        ),
+                              const SizedBox(width: 14),
+
+                              // Title & Streak
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      h.title,
+                                      style: theme.textTheme.titleMedium?.copyWith(
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Row(
+                                      children: [
+                                        Icon(
+                                          Icons.local_fire_department_rounded,
+                                          size: 16,
+                                          color: h.streak > 0
+                                              ? AppColors.accent
+                                              : theme.colorScheme.onSurface.withValues(alpha: 0.3),
+                                        ),
+                                        const SizedBox(width: 4),
+                                        Text(
+                                          '${h.streak} day streak',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w700,
+                                            color: h.streak > 0
+                                                ? AppColors.accent
+                                                : theme.colorScheme.onSurface.withValues(alpha: 0.4),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Text(
+                                          '• ${h.frequency.name.toUpperCase()}',
+                                          style: theme.textTheme.bodySmall?.copyWith(fontSize: 10),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              ),
+
+                              // Edit
+                              IconButton(
+                                icon: const Icon(Icons.edit_outlined, size: 18),
+                                onPressed: () async {
+                                  final edited = await HabitForm.show(context, initial: h);
+                                  if (edited != null) {
+                                    await habitProvider.updateHabit(edited);
+                                  }
+                                },
+                              ),
+
+                              // Delete
+                              IconButton(
+                                icon: Icon(
+                                  Icons.delete_outline_rounded,
+                                  size: 18,
+                                  color: AppColors.error.withValues(alpha: 0.7),
+                                ),
+                                onPressed: () async {
+                                  final ok = await showDialog<bool>(
+                                    context: context,
+                                    builder: (_) => AlertDialog(
+                                      title: const Text('Delete Habit'),
+                                      content: const Text('Delete this habit permanently?'),
+                                      actions: [
+                                        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+                                        TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Delete', style: TextStyle(color: AppColors.error))),
+                                      ],
+                                    ),
+                                  );
+                                  if (ok == true) {
+                                    await habitProvider.deleteHabit(h.id);
+                                  }
+                                },
+                              ),
+                            ],
+                          ),
+
+                          const SizedBox(height: 14),
+
+                          // 7-day history dot matrix
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: last7Days.map((dStr) {
+                              final isDone = h.history[dStr] ?? false;
+                              final dt = DateTime.parse(dStr);
+                              final dayName = DateFormat('E').format(dt).substring(0, 2);
+                              final isToday = dStr == todayStr;
+
+                              return GestureDetector(
+                                onTap: () => habitProvider.toggleDay(h, dStr),
+                                child: Column(
+                                  children: [
+                                    Text(
+                                      dayName,
+                                      style: TextStyle(
+                                        fontSize: 10,
+                                        fontWeight: isToday ? FontWeight.w800 : FontWeight.w500,
+                                        color: isToday ? AppColors.habits : theme.colorScheme.onSurface.withValues(alpha: 0.4),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Container(
+                                      width: 24,
+                                      height: 24,
+                                      decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        color: isDone ? AppColors.success : theme.dividerColor.withValues(alpha: 0.3),
+                                        border: isToday
+                                            ? Border.all(color: AppColors.habits, width: 2)
+                                            : null,
+                                      ),
+                                      child: isDone
+                                          ? const Icon(Icons.check_rounded, size: 14, color: Colors.white)
+                                          : null,
+                                    ),
+                                  ],
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                        ],
                       ),
                     ),
                   ),
                 );
-              }).toList(),
+              },
             ),
-          ),
-          if (!isDoneToday) ...[
-            const SizedBox(height: AppSpacing.sm),
-            Padding(
-              padding: const EdgeInsets.only(right: AppSpacing.sm),
-              child: OutlinedButton.icon(
-                onPressed: () => onToggle(todayStr),
-                style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(44)),
-                icon: const Icon(Icons.check_rounded, size: AppSizes.iconMd),
-                label: const Text('Mark today done'),
-              ),
-            ),
-          ],
-        ],
+        ),
       ),
     );
   }

@@ -4,7 +4,7 @@ import 'package:provider/provider.dart';
 import '../models/alarm_model.dart';
 import '../providers/app_providers.dart';
 import '../services/notification_service.dart';
-import 'ds/ds.dart';
+import '../utils/app_colors.dart';
 
 class AlarmRingingDialog extends StatefulWidget {
   final AlarmModel alarm;
@@ -108,11 +108,15 @@ class _AlarmRingingDialogState extends State<AlarmRingingDialog>
 
     if (mounted) {
       Navigator.of(context, rootNavigator: true).pop();
+      ScaffoldMessenger.of(context).clearSnackBars();
       final remaining = 3 - nextCount;
-      AppSnack.show(
-        context,
-        'Snoozed for 5 minutes · $remaining snooze${remaining == 1 ? "" : "s"} left',
-        duration: const Duration(seconds: 3),
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('⏰ Alarm snoozed for 5 minutes ($remaining snooze${remaining == 1 ? "" : "s"} remaining)'),
+          backgroundColor: AppColors.alarm,
+          duration: const Duration(seconds: 3),
+          behavior: SnackBarBehavior.floating,
+        ),
       );
     }
   }
@@ -149,68 +153,137 @@ class _AlarmRingingDialogState extends State<AlarmRingingDialog>
 
   @override
   Widget build(BuildContext context) {
-    final scheme = context.scheme;
+    final theme = Theme.of(context);
     final timeStr =
         '${widget.alarm.hour.toString().padLeft(2, '0')}:${widget.alarm.minute.toString().padLeft(2, '0')}';
-    final noSnoozes = widget.snoozeCount >= 3;
 
     return PopScope(
       canPop: false,
       child: Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.xl, AppSpacing.lg, AppSpacing.lg),
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              // Pulsing Alarm Bell Icon
               ScaleTransition(
-                scale: Tween<double>(begin: 0.95, end: 1.08).animate(
+                scale: Tween<double>(begin: 0.9, end: 1.2).animate(
                   CurvedAnimation(parent: _animController, curve: Curves.easeInOut),
                 ),
                 child: Container(
-                  padding: const EdgeInsets.all(AppSpacing.lg),
-                  decoration: BoxDecoration(color: scheme.primaryContainer, shape: BoxShape.circle),
-                  child: Icon(Icons.alarm_on_rounded, size: 48, color: scheme.onPrimaryContainer),
+                  padding: const EdgeInsets.all(22),
+                  decoration: BoxDecoration(
+                    color: AppColors.alarm.withValues(alpha: 0.15),
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppColors.alarm.withValues(alpha: 0.3),
+                        blurRadius: 24,
+                        spreadRadius: 4,
+                      ),
+                    ],
+                  ),
+                  child: const Icon(
+                    Icons.alarm_on_rounded,
+                    size: 56,
+                    color: AppColors.alarm,
+                  ),
                 ),
               ),
-              const SizedBox(height: AppSpacing.md),
-              Text('Alarm', style: context.text.labelLarge?.copyWith(color: context.colors.textSecondary)),
-              const SizedBox(height: AppSpacing.xxs),
+              const SizedBox(height: 20),
+              Text(
+                '⏰ ALARM RINGING',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w900,
+                  color: AppColors.alarm,
+                  letterSpacing: 1.5,
+                ),
+              ),
+              const SizedBox(height: 8),
               Text(
                 timeStr,
-                style: context.text.displaySmall?.copyWith(fontSize: 52, fontFeatures: const [FontFeature.tabularFigures()]),
+                style: const TextStyle(
+                  fontSize: 44,
+                  fontWeight: FontWeight.w900,
+                  fontFamily: 'monospace',
+                  letterSpacing: 2,
+                ),
               ),
-              const SizedBox(height: AppSpacing.xxs),
+              const SizedBox(height: 6),
               Text(
-                widget.alarm.label.isNotEmpty ? widget.alarm.label : 'Wake up',
+                widget.alarm.label.isNotEmpty ? widget.alarm.label : 'Wake Up Routine',
                 textAlign: TextAlign.center,
-                style: context.text.titleMedium,
+                style: theme.textTheme.bodyLarge?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
               ),
-              const SizedBox(height: AppSpacing.sm),
-              StatusBadge(
-                label: noSnoozes
-                    ? 'No snoozes left'
-                    : '${3 - widget.snoozeCount} of 3 snoozes left',
-                icon: Icons.snooze_rounded,
-                tone: noSnoozes ? StatusTone.warning : StatusTone.neutral,
+              const SizedBox(height: 12),
+
+              // Snooze count chip
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: widget.snoozeCount >= 3
+                      ? AppColors.error.withValues(alpha: 0.12)
+                      : (widget.snoozeCount > 0
+                          ? Colors.orange.withValues(alpha: 0.12)
+                          : AppColors.primary.withValues(alpha: 0.12)),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  widget.snoozeCount >= 3
+                      ? 'No snoozes remaining (3/3 used)'
+                      : (widget.snoozeCount == 0
+                          ? '3 Snoozes Available (5 min each)'
+                          : 'Snooze ${widget.snoozeCount} of 3 used (${3 - widget.snoozeCount} left)'),
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: widget.snoozeCount >= 3
+                        ? AppColors.error
+                        : (widget.snoozeCount > 0 ? Colors.orange[800] : AppColors.primary),
+                  ),
+                ),
               ),
-              const SizedBox(height: AppSpacing.lg),
+              const SizedBox(height: 24),
+
+              // Turn Off Button
               SizedBox(
                 width: double.infinity,
-                child: FilledButton.icon(
-                  style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(AppSizes.buttonHeight + 4)),
-                  icon: const Icon(Icons.alarm_off_rounded),
-                  label: const Text('Turn off'),
+                height: 52,
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.alarm,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  ),
+                  icon: const Icon(Icons.alarm_off_rounded, size: 22),
+                  label: const Text(
+                    'TURN OFF ALARM',
+                    style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16, letterSpacing: 0.5),
+                  ),
                   onPressed: _turnOff,
                 ),
               ),
-              const SizedBox(height: AppSpacing.sm),
+              const SizedBox(height: 12),
+
+              // Snooze Button
               SizedBox(
                 width: double.infinity,
+                height: 46,
                 child: OutlinedButton.icon(
-                  style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(AppSizes.buttonHeight)),
-                  icon: const Icon(Icons.snooze_rounded, size: AppSizes.iconMd),
-                  label: Text(noSnoozes ? 'No snoozes left' : 'Snooze 5 minutes'),
-                  onPressed: noSnoozes ? null : _snooze,
+                  style: OutlinedButton.styleFrom(
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  ),
+                  icon: const Icon(Icons.snooze_rounded, size: 18),
+                  label: Text(
+                    widget.snoozeCount >= 3
+                        ? 'No Snoozes Remaining'
+                        : 'Snooze (+5m) • ${3 - widget.snoozeCount} left',
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  onPressed: widget.snoozeCount >= 3 ? null : _snooze,
                 ),
               ),
             ],
