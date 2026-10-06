@@ -1,70 +1,50 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_animate/flutter_animate.dart';
-import '../utils/app_colors.dart';
+import '../widgets/ds/ds.dart';
 
 class SplashScreen extends StatelessWidget {
   const SplashScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
+    final scheme = context.scheme;
     return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(gradient: AppColors.authGradient),
-        child: Center(
+      body: Center(
+        child: TweenAnimationBuilder<double>(
+          tween: Tween(begin: 0, end: 1),
+          duration: AppMotion.slow,
+          curve: AppMotion.curve,
+          builder: (context, t, child) => Opacity(
+            opacity: t,
+            child: Transform.translate(offset: Offset(0, 8 * (1 - t)), child: child),
+          ),
           child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
             children: [
-              // Animated App Logo Icon
-              Container(
-                width: 120,
-                height: 120,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(30),
-                  boxShadow: [
-                    BoxShadow(
-                      color: AppColors.primary.withValues(alpha: 0.4),
-                      blurRadius: 30,
-                      spreadRadius: 4,
-                      offset: const Offset(0, 10),
-                    ),
-                  ],
-                ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(30),
+              ClipRRect(
+                borderRadius: AppRadius.lgAll,
+                child: SizedBox(
+                  width: 88,
+                  height: 88,
                   child: Image.asset(
                     'assets/images/app_logo.jpg',
                     fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => Container(
-                      color: Colors.white.withValues(alpha: 0.15),
-                      child: const Icon(Icons.eco_rounded,
-                          size: 64, color: Colors.white),
+                    errorBuilder: (_, __, ___) => ColoredBox(
+                      color: scheme.primaryContainer,
+                      child: Icon(Icons.eco_rounded, size: 48, color: scheme.onPrimaryContainer),
                     ),
                   ),
                 ),
-              ).animate(onPlay: (c) => c.repeat(reverse: true)).scale(
-                    begin: const Offset(1, 1),
-                    end: const Offset(1.05, 1.05),
-                    duration: 1.8.seconds,
-                  ),
-              const SizedBox(height: 28),
-              Text(
-                'Grow',
-                style: Theme.of(context).textTheme.displayLarge?.copyWith(
-                      color: Colors.white,
-                      fontSize: 44,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 1.2,
-                    ),
-              ).animate().fadeIn(duration: 600.ms).slideY(begin: 0.2, end: 0),
-              const SizedBox(height: 48),
-              const SizedBox(
-                width: 32,
-                height: 32,
-                child: CircularProgressIndicator(
-                  color: Colors.white,
-                  strokeWidth: 2.5,
-                ),
-              ).animate().fadeIn(delay: 400.ms),
+              ),
+              const SizedBox(height: AppSpacing.lg),
+              Text('Grow', style: context.text.headlineMedium),
+              const SizedBox(height: AppSpacing.xxs),
+              Text('Build better days', style: context.text.bodyMedium?.copyWith(color: context.colors.textSecondary)),
+              const SizedBox(height: AppSpacing.xl),
+              SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(strokeWidth: 2.5, color: scheme.primary),
+              ),
             ],
           ),
         ),

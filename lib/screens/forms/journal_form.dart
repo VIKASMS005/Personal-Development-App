@@ -1,20 +1,18 @@
 import 'package:flutter/material.dart';
 import '../../models/journal_entry.dart';
+import '../../widgets/ds/ds.dart';
 
 
 class JournalForm extends StatefulWidget {
   final JournalEntry? initial;
   const JournalForm({super.key, this.initial});
 
-  static Future<JournalEntry?> show(BuildContext context, {JournalEntry? initial}) {
-    return showDialog<JournalEntry?>(
-      context: context,
-      builder: (_) => Dialog(
-        insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-        child: JournalForm(initial: initial),
-      ),
-    );
-  }
+  static Future<JournalEntry?> show(BuildContext context, {JournalEntry? initial}) => showModalBottomSheet<JournalEntry?>(
+        context: context,
+        isScrollControlled: true,
+        useSafeArea: true,
+        builder: (_) => JournalForm(initial: initial),
+      );
 
   @override
   State<JournalForm> createState() => _JournalFormState();
@@ -26,15 +24,6 @@ class _JournalFormState extends State<JournalForm> {
   late TextEditingController _textC;
   late TextEditingController _tagsC;
   String _selectedMood = 'calm';
-
-  static const _moods = [
-    ('happy', '😊 Happy', Color(0xFF10B981)),
-    ('calm', '😌 Calm', Color(0xFF06B6D4)),
-    ('energetic', '⚡ Energetic', Color(0xFFF59E0B)),
-    ('neutral', '😐 Neutral', Color(0xFF64748B)),
-    ('stressed', '😰 Stressed', Color(0xFFEF4444)),
-    ('sad', '😔 Sad', Color(0xFF8B5CF6)),
-  ];
 
   @override
   void initState() {
@@ -78,89 +67,60 @@ class _JournalFormState extends State<JournalForm> {
   @override
   Widget build(BuildContext context) {
     final isEdit = widget.initial != null;
-    final theme = Theme.of(context);
+    final moods = journalMoods.contains(_selectedMood) ? journalMoods : [...journalMoods, _selectedMood];
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(24),
+    return SheetScaffold(
+      title: isEdit ? 'Edit entry' : 'New journal entry',
+      footer: FilledButton(
+        onPressed: _save,
+        style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(AppSizes.buttonHeight)),
+        child: Text(isEdit ? 'Save changes' : 'Save entry'),
+      ),
       child: Form(
         key: _form,
         child: Column(
-          mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  isEdit ? 'Edit Reflection' : 'Daily Reflection',
-                  style: theme.textTheme.titleLarge,
-                ),
-                IconButton(
-                  icon: const Icon(Icons.close_rounded),
-                  onPressed: () => Navigator.pop(context),
-                ),
-              ],
+            const FieldLabel('How are you feeling?'),
+            ChoiceWrap<String>(
+              options: moods,
+              selected: _selectedMood,
+              labelOf: moodLabel,
+              iconOf: moodIcon,
+              onSelected: (m) => setState(() => _selectedMood = m),
             ),
-            const SizedBox(height: 16),
-            Text('How are you feeling?', style: theme.textTheme.titleSmall),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: _moods.map((m) {
-                final isSelected = _selectedMood == m.$1;
-                return ChoiceChip(
-                  label: Text(m.$2),
-                  selected: isSelected,
-                  selectedColor: m.$3.withValues(alpha: 0.2),
-                  labelStyle: TextStyle(
-                    color: isSelected ? m.$3 : null,
-                    fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-                  ),
-                  onSelected: (val) {
-                    if (val) setState(() => _selectedMood = m.$1);
-                  },
-                );
-              }).toList(),
-            ),
-            const SizedBox(height: 16),
+            const SizedBox(height: AppSpacing.lg),
             TextFormField(
               controller: _titleC,
-              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
+              textCapitalization: TextCapitalization.sentences,
+              textInputAction: TextInputAction.next,
               decoration: const InputDecoration(
                 labelText: 'Title',
-                hintText: 'e.g. Breakthrough in Focus, Evening Reflection',
-                prefixIcon: Icon(Icons.title_rounded),
+                hintText: 'e.g. Evening reflection',
               ),
               validator: (v) => v == null || v.trim().isEmpty ? 'Please enter a title' : null,
             ),
-            const SizedBox(height: 14),
+            const SizedBox(height: AppSpacing.md),
             TextFormField(
               controller: _textC,
-              maxLines: 5,
+              minLines: 4,
+              maxLines: 8,
+              textCapitalization: TextCapitalization.sentences,
               decoration: const InputDecoration(
-                labelText: 'Description',
+                labelText: 'Entry',
                 hintText: 'What went well today? What did you learn?',
                 alignLabelWithHint: true,
               ),
-              validator: (v) => v == null || v.trim().isEmpty ? 'Description cannot be empty' : null,
+              validator: (v) => v == null || v.trim().isEmpty ? 'Please write something' : null,
             ),
-            const SizedBox(height: 14),
+            const SizedBox(height: AppSpacing.md),
             TextFormField(
               controller: _tagsC,
               decoration: const InputDecoration(
-                labelText: 'Tags (comma separated)',
-                hintText: 'Gratitude, Growth, Mindset',
-                prefixIcon: Icon(Icons.tag_rounded),
-              ),
-            ),
-            const SizedBox(height: 24),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                icon: const Icon(Icons.check_rounded),
-                label: Text(isEdit ? 'Save Reflection' : 'Post Entry'),
-                onPressed: _save,
+                labelText: 'Tags (optional)',
+                hintText: 'Gratitude, Growth',
+                helperText: 'Separate tags with commas',
+                prefixIcon: Icon(Icons.tag_rounded, size: AppSizes.iconMd),
               ),
             ),
           ],

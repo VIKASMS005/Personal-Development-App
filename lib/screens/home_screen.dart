@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
@@ -6,8 +7,9 @@ import '../providers/app_providers.dart';
 import '../repositories/app_data_repository.dart';
 import '../services/notification_service.dart';
 import '../services/step_tracker_service.dart';
-import '../utils/app_colors.dart';
-import '../widgets/weekly_expense_chart.dart';
+import '../models/todo.dart';
+import '../widgets/ds/ds.dart';
+import '../widgets/todo_widgets.dart';
 import 'todo_screen.dart';
 import 'habit_screen.dart';
 import 'journal_screen.dart';
@@ -20,6 +22,8 @@ import 'forms/todo_form.dart';
 import 'forms/habit_form.dart';
 import 'forms/journal_form.dart';
 import 'forms/finance_form.dart';
+import 'forms/reminder_form.dart';
+import 'task_report_screen.dart';
 import 'steps_screen.dart';
 import 'screen_time_screen.dart';
 import '../widgets/global_task_tracker_bar.dart';
@@ -42,9 +46,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final Set<String> _rungAlarmIdsThisMinute = {};
   final Set<String> _rungReminderIdsThisMinute = {};
   int _lastWatchedMinute = -1;
-
-  final PageController _analyticsPageController = PageController();
-  int _activeAnalyticsSlide = 0;
 
   @override
   void initState() {
@@ -93,7 +94,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _alarmWatcherTimer?.cancel();
-    _analyticsPageController.dispose();
     NotificationService.onAlarmTriggered = null;
     super.dispose();
   }
@@ -245,10 +245,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   String _greeting() {
     final hour = DateTime.now().hour;
-    if (hour >= 5 && hour < 12) return 'Good Morning';
-    if (hour >= 12 && hour < 17) return 'Good Afternoon';
-    if (hour >= 17 && hour < 22) return 'Good Evening';
-    return 'Good Night';
+    if (hour >= 5 && hour < 12) return 'Good morning';
+    if (hour >= 12 && hour < 17) return 'Good afternoon';
+    if (hour >= 17 && hour < 22) return 'Good evening';
+    return 'Good night';
+  }
+
+  void _openTab(int index) {
+    setState(() => _currentIndex = index);
+  }
+
+  void _push(Widget screen) {
+    Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
   }
 
   @override
@@ -271,53 +279,56 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           const GlobalTaskTrackerBar(),
         ],
       ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _currentIndex,
-        onDestinationSelected: (idx) {
-          setState(() => _currentIndex = idx);
-          if (idx == 0) {
-            final auth = context.read<AuthProvider>();
-            final uid = auth.uid ?? 'local_user';
-            _reloadProviders(uid);
-          }
-        },
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.home_outlined),
-            selectedIcon: Icon(Icons.home_rounded),
-            label: 'Home',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.table_chart_outlined),
-            selectedIcon: Icon(Icons.table_chart_rounded),
-            label: 'Timetable',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.psychology_outlined),
-            selectedIcon: Icon(Icons.psychology_rounded),
-            label: 'AI Coach',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.alarm_outlined),
-            selectedIcon: Icon(Icons.alarm_rounded),
-            label: 'Clock',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.person_outline_rounded),
-            selectedIcon: Icon(Icons.person_rounded),
-            label: 'Profile',
-          ),
-        ],
+      bottomNavigationBar: DecoratedBox(
+        decoration: BoxDecoration(
+          border: Border(top: BorderSide(color: context.colors.divider)),
+        ),
+        child: NavigationBar(
+          selectedIndex: _currentIndex,
+          onDestinationSelected: (idx) {
+            setState(() => _currentIndex = idx);
+            if (idx == 0) {
+              final auth = context.read<AuthProvider>();
+              final uid = auth.uid ?? 'local_user';
+              _reloadProviders(uid);
+            }
+          },
+          destinations: const [
+            NavigationDestination(
+              icon: Icon(Icons.home_outlined),
+              selectedIcon: Icon(Icons.home_rounded),
+              label: 'Home',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.calendar_view_day_outlined),
+              selectedIcon: Icon(Icons.calendar_view_day_rounded),
+              label: 'Timetable',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.auto_awesome_outlined),
+              selectedIcon: Icon(Icons.auto_awesome_rounded),
+              label: 'AI Coach',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.alarm_outlined),
+              selectedIcon: Icon(Icons.alarm_rounded),
+              label: 'Clock',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.person_outline_rounded),
+              selectedIcon: Icon(Icons.person_rounded),
+              label: 'Profile',
+            ),
+          ],
+        ),
       ),
     );
   }
 
   // ===========================================================================
-  // DASHBOARD BUILDER (Sliding Analytics Carousel + 2x2 Focus Modules Grid)
+  // DASHBOARD: Today → Quick actions → Up next → Goals → Activity → Tools
   // ===========================================================================
   Widget _buildDashboard(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
     final auth = context.watch<AuthProvider>();
     final profile = context.watch<ProfileProvider>();
     final todos = context.watch<TodoProvider>();
@@ -327,6 +338,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final engineProv = context.watch<EngineProvider>();
     final stepProv = context.watch<StepProvider>();
     final screenProv = context.watch<ScreenTimeProvider>();
+    final reminderProv = context.watch<ReminderProvider>();
 
     // FIX C1: Use scheduledTasks (tasks only, not goals) for the task badge count.
     // todos.todos includes both Tasks and Goals — using it would inflate the count.
@@ -358,774 +370,314 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           );
     });
 
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    bool isToday(DateTime? d) => d != null && DateUtils.isSameDay(d, today);
+
+    final upNext = [...pendingTodos]..sort((a, b) {
+        if (a.dueDate == null && b.dueDate == null) return a.priority.compareTo(b.priority);
+        if (a.dueDate == null) return 1;
+        if (b.dueDate == null) return -1;
+        return a.dueDate!.compareTo(b.dueDate!);
+      });
+    final dueTodayPending = pendingTodos.where((t) => isToday(t.dueDate)).length;
+    final remindersToday = reminderProv.upcomingReminders.where((r) => isToday(r.dateTime)).toList();
+    final goals = [...todos.activeGoals]..sort((a, b) {
+        if (a.dueDate == null) return 1;
+        if (b.dueDate == null) return -1;
+        return a.dueDate!.compareTo(b.dueDate!);
+      });
+    final tasksDoneToday = engineProv.todayProgress?.tasksCompletedToday ??
+        todos.completedTasks.where((t) => isToday(t.updatedAt)).length;
+
+    Future<void> addTask() async {
+      final t = await TodoForm.show(context);
+      if (t != null && auth.uid != null) {
+        t.uid = auth.uid!;
+        await todos.addTodo(t);
+      }
+    }
+
+    Future<void> addReminder() async {
+      final r = await ReminderForm.show(context);
+      if (r != null && auth.uid != null) {
+        r.uid = auth.uid!;
+        await reminderProv.addReminder(r);
+      }
+    }
+
+    Future<void> addHabit() async {
+      final h = await HabitForm.show(context);
+      if (h != null && auth.uid != null) {
+        h.uid = auth.uid!;
+        await habits.addHabit(h);
+      }
+    }
+
+    Future<void> addJournal() async {
+      final j = await JournalForm.show(context);
+      if (j != null && auth.uid != null) {
+        j.uid = auth.uid!;
+        await journal.addJournal(j);
+      }
+    }
+
+    Future<void> addExpense() async {
+      final tx = await FinanceForm.show(context);
+      if (tx != null && auth.uid != null) {
+        tx.uid = auth.uid!;
+        await finance.addTransaction(tx);
+      }
+    }
+
+    final weekStart = today.subtract(const Duration(days: 6));
+    final weekSpend = finance.transactions
+        .where((tx) => tx.amount < 0 && !tx.date.isBefore(weekStart))
+        .fold<double>(0, (sum, tx) => sum + tx.amount.abs());
+    final money = NumberFormat.compactCurrency(symbol: '₹', decimalDigits: 0);
+
     return Scaffold(
-      appBar: AppBar(
-        titleSpacing: 16,
-        title: Row(
+      body: SafeArea(
+        bottom: false,
+        child: PageListView(
+          clearFab: false,
+          onRefresh: () async {
+            try {
+              final auth = context.read<AuthProvider>();
+              final uid = auth.uid ?? 'local_user';
+              await StepTrackerService.instance.refreshSteps(uid: uid);
+              await _reloadProviders(uid);
+            } catch (e) {
+              debugPrint('[HomeScreen] Refresh error: $e');
+            }
+          },
           children: [
-            // App Logo
-            Container(
-              width: 38,
-              height: 38,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(10),
-                boxShadow: [
-                  BoxShadow(
-                    color: AppColors.primary.withValues(alpha: 0.3),
-                    blurRadius: 10,
-                    offset: const Offset(0, 3),
+            _DashboardHeader(
+              greeting: _greeting(),
+              name: profile.displayName,
+              date: DateFormat('EEEE, d MMMM').format(now),
+              onProfile: () => _openTab(4),
+            ),
+            const SizedBox(height: AppSpacing.md),
+
+            // ─── Today ──────────────────────────────────────────────────────
+            _TodayCard(
+              tasksDone: tasksDoneToday,
+              tasksDueToday: dueTodayPending,
+              tasksScheduled: pendingTodos.length,
+              habitsDone: habitsDoneToday,
+              habitsTotal: activeHabits.length,
+              remindersToday: remindersToday.length,
+              goalsActive: todos.activeGoals.length,
+              insight: engineProv.insights.isNotEmpty ? engineProv.insights.first.text : null,
+              onAskAI: () => _openTab(2),
+            ),
+            const SizedBox(height: AppSpacing.lg),
+
+            // ─── Quick actions ─────────────────────────────────────────────
+            _QuickActions(actions: [
+              _QuickAction(Icons.add_task_rounded, 'Task', addTask),
+              _QuickAction(Icons.notifications_none_rounded, 'Reminder', addReminder),
+              _QuickAction(Icons.repeat_rounded, 'Habit', addHabit),
+              _QuickAction(Icons.edit_note_rounded, 'Journal', addJournal),
+              _QuickAction(Icons.receipt_long_outlined, 'Expense', addExpense),
+            ]),
+            const SectionGap(),
+
+            // ─── Up next ───────────────────────────────────────────────────
+            SectionHeader(
+              title: 'Up next',
+              actionLabel: 'All tasks',
+              onAction: () => _push(const TodosScreen()),
+            ),
+            if (upNext.isEmpty && remindersToday.isEmpty)
+              AppCard(
+                child: EmptyState(
+                  compact: true,
+                  icon: Icons.task_alt_rounded,
+                  title: 'Nothing scheduled',
+                  subtitle: 'Add a task or reminder to plan your day.',
+                  action: FilledButton.tonalIcon(
+                    onPressed: addTask,
+                    icon: const Icon(Icons.add_rounded, size: AppSizes.iconMd),
+                    label: const Text('Add task'),
+                  ),
+                ),
+              )
+            else
+              AppCard(
+                padding: const EdgeInsets.symmetric(vertical: AppSpacing.xxs),
+                child: Column(
+                  children: [
+                    for (final t in upNext.take(3))
+                      _UpNextTask(
+                        todo: t,
+                        onToggle: t.canComplete ? () => todos.toggleCompleted(t) : null,
+                        onTap: () => _push(const TodosScreen()),
+                      ),
+                    if (upNext.isNotEmpty && remindersToday.isNotEmpty)
+                      const Divider(indent: AppSpacing.md, endIndent: AppSpacing.md),
+                    for (final r in remindersToday.take(2))
+                      _UpNextReminder(
+                        title: r.title,
+                        time: DateFormat('h:mm a').format(r.dateTime),
+                        onTap: () {
+                          AlarmScreen.requestedTab.value = AlarmScreen.remindersTab;
+                          _openTab(3);
+                        },
+                      ),
+                  ],
+                ),
+              ),
+
+            // ─── Goals ─────────────────────────────────────────────────────
+            if (goals.isNotEmpty) ...[
+              const SectionGap(),
+              SectionHeader(
+                title: 'Goals',
+                actionLabel: 'All goals',
+                onAction: () => _push(const TodosScreen(initialGoals: true)),
+              ),
+              for (final g in goals.take(2)) ...[
+                GoalProgressCard(goal: g, onTap: () => _push(const TodosScreen(initialGoals: true))),
+                const SizedBox(height: AppSpacing.sm),
+              ],
+            ],
+            const SectionGap(),
+
+            // ─── Activity ──────────────────────────────────────────────────
+            const SectionHeader(title: 'Activity'),
+            _StepsSummaryCard(
+              steps: stepProv.todayRecord?.stepCount ?? stepProv.todaySteps,
+              goal: stepProv.todayRecord?.goal ?? stepProv.dailyGoal,
+              calories: stepProv.todayRecord?.calories ?? 0,
+              distanceKm: stepProv.todayRecord?.distanceKm ?? 0,
+              onTap: () => _push(const StepsScreen()),
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            StatRow(children: [
+              StatCard(
+                icon: Icons.phone_android_rounded,
+                label: 'Screen time today',
+                value: screenProv.todayFormattedTotal,
+                onTap: () => _push(const ScreenTimeScreen()),
+              ),
+              StatCard(
+                icon: Icons.account_balance_wallet_outlined,
+                label: 'Spent in last 7 days',
+                value: money.format(weekSpend),
+                onTap: () => _push(const FinanceScreen()),
+              ),
+            ]),
+            const SectionGap(),
+
+            // ─── All tools ─────────────────────────────────────────────────
+            const SectionHeader(title: 'Your tools'),
+            AppCard(
+              padding: EdgeInsets.zero,
+              child: Column(
+                children: [
+                  _ToolRow(
+                    icon: Icons.task_alt_rounded,
+                    title: 'Tasks & goals',
+                    detail: '${pendingTodos.length} scheduled',
+                    onTap: () => _push(const TodosScreen()),
+                  ),
+                  _ToolRow(
+                    icon: Icons.repeat_rounded,
+                    title: 'Habits',
+                    detail: '$habitsDoneToday of ${activeHabits.length} done today',
+                    onTap: () => _push(const HabitsScreen()),
+                  ),
+                  _ToolRow(
+                    icon: Icons.edit_note_rounded,
+                    title: 'Journal',
+                    detail: '${journal.entries.length} ${journal.entries.length == 1 ? 'entry' : 'entries'}',
+                    onTap: () => _push(const JournalScreen()),
+                  ),
+                  _ToolRow(
+                    icon: Icons.account_balance_wallet_outlined,
+                    title: 'Finance',
+                    detail: '${finance.transactions.length} ${finance.transactions.length == 1 ? 'entry' : 'entries'}',
+                    onTap: () => _push(const FinanceScreen()),
+                  ),
+                  _ToolRow(
+                    icon: Icons.directions_walk_rounded,
+                    title: 'Steps & activity',
+                    detail: '${NumberFormat('#,###').format(stepProv.todaySteps)} steps today',
+                    onTap: () => _push(const StepsScreen()),
+                  ),
+                  _ToolRow(
+                    icon: Icons.insights_rounded,
+                    title: 'Reports',
+                    detail: 'Focus time and completion',
+                    onTap: () => _push(const TaskReportScreen()),
+                    showDivider: false,
                   ),
                 ],
               ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(10),
-                child: Image.asset(
-                  'assets/images/app_logo.jpg',
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) => Container(
-                    color: AppColors.primary,
-                    child: const Icon(Icons.eco_rounded, size: 22, color: Colors.white),
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '${_greeting()}, ${profile.displayName}!',
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w800,
-                    fontSize: 16,
-                  ),
-                ),
-                Text(
-                  'Grow Daily OS',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: AppColors.primary,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 11,
-                  ),
-                ),
-              ],
             ),
           ],
         ),
       ),
-      body: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 800),
-          child: RefreshIndicator(
-            color: AppColors.primary,
-            onRefresh: () async {
-              try {
-                final auth = context.read<AuthProvider>();
-                final uid = auth.uid ?? 'local_user';
-                await StepTrackerService.instance.refreshSteps(uid: uid);
-                await _reloadProviders(uid);
-              } catch (e) {
-                debugPrint('[HomeScreen] Refresh error: $e');
-              }
-            },
-            child: ListView(
-              physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 80),
-                children: [
-              // ─── 1. Sliding Analytics Carousel (One Card at a Time) ───────
-              SizedBox(
-                height: 250,
-                child: PageView(
-                  controller: _analyticsPageController,
-                  onPageChanged: (index) {
-                    setState(() => _activeAnalyticsSlide = index);
-                  },
-                  children: [
-                    // Slide 0: Today's Progress + Engine Insights
-                    _TodayProgressCard(
-                      engineProv: engineProv,
-                      onAskAI: () => setState(() => _currentIndex = 2),
-                    ),
-
-                    // Slide 1: Weekly Expenditure Bar Chart
-                    WeeklyExpenseChart(
-                      transactions: finance.transactions,
-                      onTapDetails: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (_) => const FinanceScreen()),
-                        );
-                      },
-                    ),
-
-                    // Slide 2: Precision Steps Counter
-                    _buildStepsCarouselCard(theme, isDark, stepProv),
-
-                    // Slide 3: Device Screen Time (All Apps)
-                    _buildScreenTimeCarouselCard(theme, isDark, screenProv),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 10),
-
-              // ─── 2. Dot Pagination Indicators ─────────────────────────────
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: List.generate(4, (idx) {
-                  final isActive = _activeAnalyticsSlide == idx;
-                  return GestureDetector(
-                    onTap: () {
-                      _analyticsPageController.animateToPage(
-                        idx,
-                        duration: const Duration(milliseconds: 300),
-                        curve: Curves.easeInOut,
-                      );
-                    },
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 250),
-                      margin: const EdgeInsets.symmetric(horizontal: 4),
-                      width: isActive ? 22 : 7,
-                      height: 7,
-                      decoration: BoxDecoration(
-                        color: isActive
-                            ? AppColors.primary
-                            : theme.colorScheme.onSurface.withValues(alpha: 0.2),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                    ),
-                  );
-                }),
-              ),
-              const SizedBox(height: 20),
-
-              // ─── 3. Section Header: Core Focus Modules ────────────────────
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    'Daily Focus Modules',
-                    style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-
-              // ─── 4. 2x3 Focus Modules Grid ─────────────────────────────────
-              Row(
-                children: [
-                  // Module 1: Tasks and Goals
-                  Expanded(
-                    child: _CompactModuleTile(
-                      title: 'Tasks and Goals',
-                      subtitle: '${pendingTodos.length} scheduled',
-                      icon: Icons.task_alt_rounded,
-                      color: AppColors.tasks,
-                      badgeText: '${pendingTodos.length}',
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (_) => const TodosScreen()),
-                        );
-                      },
-                      onAdd: () async {
-                        final t = await TodoForm.show(context);
-                        if (t != null && auth.uid != null) {
-                          t.uid = auth.uid!;
-                          await todos.addTodo(t);
-                        }
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  // Module 2: Habits & Routine
-                  Expanded(
-                    child: _CompactModuleTile(
-                      title: 'Habits & Routine',
-                      subtitle: '$habitsDoneToday/${activeHabits.length} done',
-                      icon: Icons.repeat_rounded,
-                      color: AppColors.habits,
-                      badgeText: '${activeHabits.length}',
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (_) => const HabitsScreen()),
-                        );
-                      },
-                      onAdd: () async {
-                        final h = await HabitForm.show(context);
-                        if (h != null && auth.uid != null) {
-                          h.uid = auth.uid!;
-                          await habits.addHabit(h);
-                        }
-                      },
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  // Module 3: Daily Journal
-                  Expanded(
-                    child: _CompactModuleTile(
-                      title: 'Daily Journal',
-                      subtitle: '${journal.entries.length} reflections',
-                      icon: Icons.edit_note_rounded,
-                      color: AppColors.journal,
-                      badgeText: '${journal.entries.length}',
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (_) => const JournalScreen()),
-                        );
-                      },
-                      onAdd: () async {
-                        final j = await JournalForm.show(context);
-                        if (j != null && auth.uid != null) {
-                          j.uid = auth.uid!;
-                          await journal.addJournal(j);
-                        }
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  // Module 4: Finance & Budget
-                  Expanded(
-                    child: _CompactModuleTile(
-                      title: 'Finance & Budget',
-                      subtitle: NumberFormat.currency(symbol: '₹', decimalDigits: 0).format(finance.totalExpense),
-                      icon: Icons.account_balance_wallet_rounded,
-                      color: AppColors.finance,
-                      badgeText: finance.transactions.isNotEmpty ? 'Active' : '0',
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (_) => const FinanceScreen()),
-                        );
-                      },
-                      onAdd: () async {
-                        final tx = await FinanceForm.show(context);
-                        if (tx != null && auth.uid != null) {
-                          tx.uid = auth.uid!;
-                          await finance.addTransaction(tx);
-                        }
-                      },
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  // Module 5: Steps & Activity
-                  Expanded(
-                    child: _CompactModuleTile(
-                      title: 'Steps & Activity',
-                      subtitle: '${NumberFormat('#,###').format(stepProv.todaySteps)} / ${NumberFormat('#,###').format(stepProv.dailyGoal)}',
-                      icon: Icons.directions_walk_rounded,
-                      color: AppColors.primary,
-                      badgeText: '${((stepProv.todaySteps / (stepProv.dailyGoal > 0 ? stepProv.dailyGoal : 1)) * 100).toInt()}%',
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (_) => const StepsScreen()),
-                        );
-                      },
-                      onAdd: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (_) => const StepsScreen()),
-                        );
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  // Module 6: Device Screen Time
-                  Expanded(
-                    child: _CompactModuleTile(
-                      title: 'Screen Time',
-                      subtitle: screenProv.todayFormattedTotal,
-                      icon: Icons.phone_android_rounded,
-                      color: const Color(0xFF6366F1),
-                      badgeText: 'All Apps',
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (_) => const ScreenTimeScreen()),
-                        );
-                      },
-                      onAdd: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (_) => const ScreenTimeScreen()),
-                        );
-                      },
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    ),
-  );
-  }
-
-  // ─── Step Counter Sliding Card ─────────────────────────────────────────────
-
-  Widget _buildStepsCarouselCard(ThemeData theme, bool isDark, StepProvider stepProv) {
-    final record = stepProv.todayRecord;
-    final steps = record?.stepCount ?? stepProv.todaySteps;
-    final goal = record?.goal ?? stepProv.dailyGoal;
-    final progress = goal > 0 ? (steps / goal).clamp(0.0, 1.0) : 0.0;
-    final cal = record?.calories ?? 0.0;
-    final km = record?.distanceKm ?? 0.0;
-
-    return Card(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(20),
-        onTap: () {
-          Navigator.push(context, MaterialPageRoute(builder: (_) => const StepsScreen()));
-        },
-        child: Padding(
-          padding: const EdgeInsets.all(18),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: AppColors.primary.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: const Icon(Icons.directions_walk_rounded, color: AppColors.primary, size: 20),
-                      ),
-                      const SizedBox(width: 10),
-                      const Text(
-                        'Step Counter & Activity',
-                        style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
-                      ),
-                    ],
-                  ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: AppColors.primary.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Text(
-                      '${(progress * 100).toInt()}% Goal',
-                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: AppColors.primary),
-                    ),
-                  ),
-                ],
-              ),
-              Row(
-                children: [
-                  SizedBox(
-                    width: 80,
-                    height: 80,
-                    child: Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        CircularProgressIndicator(
-                          value: progress,
-                          strokeWidth: 8,
-                          strokeCap: StrokeCap.round,
-                          backgroundColor: AppColors.primary.withValues(alpha: 0.15),
-                          valueColor: const AlwaysStoppedAnimation<Color>(AppColors.primary),
-                        ),
-                        const Icon(Icons.bolt_rounded, color: AppColors.primary, size: 28),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 20),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          NumberFormat('#,###').format(steps),
-                          style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w900, letterSpacing: -0.5),
-                        ),
-                        Text(
-                          'of ${NumberFormat('#,###').format(goal)} daily goal',
-                          style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurface.withValues(alpha: 0.6)),
-                        ),
-                        const SizedBox(height: 6),
-                        Row(
-                          children: [
-                            Text(
-                              '🔥 ${cal.toStringAsFixed(0)} kcal',
-                              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-                            ),
-                            const SizedBox(width: 12),
-                            Text(
-                              '📍 ${km.toStringAsFixed(1)} km',
-                              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    'Tap to view 12-month analytics',
-                    style: TextStyle(fontSize: 11, color: theme.colorScheme.onSurface.withValues(alpha: 0.5)),
-                  ),
-                  const Icon(Icons.arrow_forward_ios_rounded, size: 12, color: AppColors.primary),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  // ─── Screen Time Sliding Card ──────────────────────────────────────────────
-
-  Widget _buildScreenTimeCarouselCard(ThemeData theme, bool isDark, ScreenTimeProvider screenProv) {
-    final total = screenProv.todaySummary?.totalDuration ?? Duration.zero;
-    final topApps = (screenProv.todaySummary?.appUsages ?? []).take(2).toList();
-    final h = total.inHours;
-    final m = total.inMinutes % 60;
-    final timeStr = h > 0 ? '${h}h ${m}m' : '${m}m';
-
-    return Card(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(20),
-        onTap: () {
-          Navigator.push(context, MaterialPageRoute(builder: (_) => const ScreenTimeScreen()));
-        },
-        child: Padding(
-          padding: const EdgeInsets.all(18),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF6366F1).withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: const Icon(Icons.phone_android_rounded, color: Color(0xFF6366F1), size: 20),
-                      ),
-                      const SizedBox(width: 10),
-                      const Text(
-                        'Device Screen Time',
-                        style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
-                      ),
-                    ],
-                  ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF6366F1).withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: const Text(
-                      'All Apps',
-                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: Color(0xFF6366F1)),
-                    ),
-                  ),
-                ],
-              ),
-              Row(
-                children: [
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        timeStr,
-                        style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w900, letterSpacing: -0.5),
-                      ),
-                      Text(
-                        'Total screen on time today',
-                        style: TextStyle(fontSize: 11, color: theme.colorScheme.onSurface.withValues(alpha: 0.6)),
-                      ),
-                    ],
-                  ),
-                  const Spacer(),
-                  if (topApps.isNotEmpty)
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: topApps.map((a) {
-                        final mins = a.usage.inMinutes;
-                        final aStr = mins >= 60 ? '${mins ~/ 60}h ${mins % 60}m' : '${mins}m';
-                        return Padding(
-                          padding: const EdgeInsets.only(bottom: 4),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                a.appName,
-                                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-                              ),
-                              const SizedBox(width: 6),
-                              Text(
-                                aStr,
-                                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: Color(0xFF6366F1)),
-                              ),
-                            ],
-                          ),
-                        );
-                      }).toList(),
-                    )
-                  else
-                    Text(
-                      'No app usage recorded',
-                      style: TextStyle(fontSize: 11, fontStyle: FontStyle.italic, color: theme.colorScheme.onSurface.withValues(alpha: 0.5)),
-                    ),
-                ],
-              ),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    'Tap for app-by-app & yearly trends',
-                    style: TextStyle(fontSize: 11, color: theme.colorScheme.onSurface.withValues(alpha: 0.5)),
-                  ),
-                  const Icon(Icons.arrow_forward_ios_rounded, size: 12, color: Color(0xFF6366F1)),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
     );
   }
 }
 
-// ─── Compact Module Tile for 2x2 Grid ────────────────────────────────────────
+// ─── Dashboard pieces ────────────────────────────────────────────────────────
 
-class _CompactModuleTile extends StatelessWidget {
-  final String title;
-  final String subtitle;
-  final IconData icon;
-  final Color color;
-  final String badgeText;
-  final VoidCallback onTap;
-  final VoidCallback onAdd;
+class _DashboardHeader extends StatelessWidget {
+  final String greeting;
+  final String name;
+  final String date;
+  final VoidCallback onProfile;
 
-  const _CompactModuleTile({
-    required this.title,
-    required this.subtitle,
-    required this.icon,
-    required this.color,
-    required this.badgeText,
-    required this.onTap,
-    required this.onAdd,
+  const _DashboardHeader({
+    required this.greeting,
+    required this.name,
+    required this.date,
+    required this.onProfile,
   });
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return Card(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(18),
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: color.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Icon(icon, color: color, size: 20),
-                  ),
-                  IconButton(
-                    icon: Icon(Icons.add_circle_outline_rounded, color: color, size: 20),
-                    onPressed: onAdd,
-                    tooltip: 'Quick Add',
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Text(
-                title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800, fontSize: 14),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                subtitle,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(fontSize: 11, color: theme.colorScheme.onSurface.withValues(alpha: 0.6)),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ─── Today's Progress + Insight Card ─────────────────────────────────────────
-
-class _TodayProgressCard extends StatelessWidget {
-  final EngineProvider engineProv;
-  final VoidCallback onAskAI;
-
-  const _TodayProgressCard({
-    required this.engineProv,
-    required this.onAskAI,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final progress = engineProv.todayProgress;
-    final insights = engineProv.insights;
-
-    return Container(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: isDark
-              ? [const Color(0xFF1A2E1A), const Color(0xFF0D1F0D)]
-              : [AppColors.primary.withValues(alpha: 0.07), AppColors.primary.withValues(alpha: 0.03)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: AppColors.primary.withValues(alpha: 0.2),
-          width: 1,
-        ),
-      ),
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    final profile = context.watch<ProfileProvider>().profile;
+    final initial = name.isNotEmpty ? name.substring(0, 1).toUpperCase() : 'G';
+    final photo = profile?.photoPath;
+    final hasPhoto = photo != null && photo.isNotEmpty && File(photo).existsSync();
+    return Padding(
+      padding: const EdgeInsets.only(top: AppSpacing.md),
+      child: Row(
         children: [
-          // Header
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: AppColors.primary.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: const Icon(Icons.bar_chart_rounded, color: AppColors.primary, size: 18),
-                  ),
-                  const SizedBox(width: 10),
-                  Text(
-                    'Today\'s Progress',
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w800,
-                      fontSize: 15,
-                    ),
-                  ),
-                ],
-              ),
-              if (progress?.bestStreak != null && progress!.bestStreak > 0)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: Colors.orange.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Text(
-                    '🔥 ${progress.bestStreak}d streak',
-                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: Colors.orange),
-                  ),
-                ),
-            ],
-          ),
-
-          // Stats Row
-          if (progress != null)
-            Row(
-              children: [
-                _StatChip(
-                  icon: '⚡',
-                  label: 'Habits',
-                  value: '${progress.habitsCompleted}/${progress.habitsTotal}',
-                  color: AppColors.primary,
-                ),
-                const SizedBox(width: 8),
-                _StatChip(
-                  icon: '📋',
-                  label: 'Tasks',
-                  value: '${progress.tasksCompletedToday} done',
-                  color: AppColors.tasks,
-                ),
-              ],
-            ),
-
-          // Top insight
-          if (insights.isNotEmpty)
-            Row(
+          Expanded(
+            child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(insights.first.icon, style: const TextStyle(fontSize: 14)),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    insights.first.text,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      fontSize: 11,
-                      height: 1.3,
-                      color: theme.colorScheme.onSurface.withValues(alpha: 0.85),
-                    ),
-                  ),
+                Text(date, style: context.text.labelSmall),
+                const SizedBox(height: AppSpacing.xxs),
+                Text(
+                  '$greeting, $name',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: context.text.headlineSmall,
                 ),
               ],
             ),
-
-          // Ask Grow AI button
-          SizedBox(
-            width: double.infinity,
-            height: 38,
-            child: FilledButton.icon(
-              onPressed: onAskAI,
-              icon: const Icon(Icons.auto_awesome_rounded, size: 15),
-              label: const Text('Ask Grow AI', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12)),
-              style: FilledButton.styleFrom(
-                backgroundColor: AppColors.primary,
-                foregroundColor: Colors.white,
-                padding: EdgeInsets.zero,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
+          const SizedBox(width: AppSpacing.sm),
+          Semantics(
+            button: true,
+            label: 'Open profile',
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: onProfile,
+              child: CircleAvatar(
+                radius: 22,
+                backgroundColor: context.scheme.primaryContainer,
+                backgroundImage: hasPhoto ? FileImage(File(photo)) : null,
+                child: hasPhoto
+                    ? null
+                    : Text(initial, style: context.text.titleSmall?.copyWith(color: context.scheme.onPrimaryContainer)),
               ),
             ),
           ),
@@ -1135,57 +687,338 @@ class _TodayProgressCard extends StatelessWidget {
   }
 }
 
-class _StatChip extends StatelessWidget {
-  final String icon;
-  final String label;
-  final String value;
-  final Color color;
+class _TodayCard extends StatelessWidget {
+  final int tasksDone;
+  final int tasksDueToday;
+  final int tasksScheduled;
+  final int habitsDone;
+  final int habitsTotal;
+  final int remindersToday;
+  final int goalsActive;
+  final String? insight;
+  final VoidCallback onAskAI;
 
-  const _StatChip({
-    required this.icon,
-    required this.label,
-    required this.value,
-    required this.color,
+  const _TodayCard({
+    required this.tasksDone,
+    required this.tasksDueToday,
+    required this.tasksScheduled,
+    required this.habitsDone,
+    required this.habitsTotal,
+    required this.remindersToday,
+    required this.goalsActive,
+    required this.insight,
+    required this.onAskAI,
   });
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.1),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: color.withValues(alpha: 0.2)),
-        ),
-        child: Row(
-          children: [
-            Text(icon, style: const TextStyle(fontSize: 14)),
-            const SizedBox(width: 6),
-            Column(
+    final planned = tasksDone + tasksDueToday + habitsTotal;
+    final done = tasksDone + habitsDone;
+    final progress = planned == 0 ? 0.0 : done / planned;
+    final percent = (progress * 100).round();
+
+    return AppCard(
+      emphasized: true,
+      padding: const EdgeInsets.all(AppSpacing.md + 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              ProgressRing(
+                value: progress,
+                size: 72,
+                strokeWidth: 8,
+                child: Text('$percent%', style: context.text.titleSmall),
+              ),
+              const SizedBox(width: AppSpacing.md),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Today\'s progress', style: context.text.titleMedium),
+                    const SizedBox(height: AppSpacing.xxs),
+                    Text(
+                      planned == 0
+                          ? 'Nothing planned yet for today.'
+                          : '$done of $planned planned items done',
+                      style: context.text.bodySmall,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.md),
+          MetricStrip(metrics: [
+            Metric(value: '$tasksDone', label: 'Tasks done'),
+            Metric(value: '$habitsDone/$habitsTotal', label: 'Habits'),
+            Metric(value: '$remindersToday', label: 'Reminders'),
+            Metric(value: '$goalsActive', label: 'Goals'),
+          ]),
+          if (insight != null) ...[
+            const SizedBox(height: AppSpacing.md),
+            Divider(color: context.scheme.primary.withValues(alpha: 0.15)),
+            const SizedBox(height: AppSpacing.sm),
+            Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  value,
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w800,
-                    color: color,
-                  ),
-                ),
-                Text(
-                  label,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    fontSize: 9,
-                    color: theme.colorScheme.onSurface.withValues(alpha: 0.55),
+                Icon(Icons.lightbulb_outline_rounded, size: AppSizes.iconMd, color: context.scheme.primary),
+                const SizedBox(width: AppSpacing.xs),
+                Expanded(
+                  child: Text(
+                    insight!,
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                    style: context.text.bodySmall?.copyWith(color: context.colors.textPrimary),
                   ),
                 ),
               ],
             ),
           ],
+          const SizedBox(height: AppSpacing.xs),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: onAskAI,
+              style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xs)),
+              icon: const Icon(Icons.auto_awesome_rounded, size: AppSizes.iconSm),
+              label: const Text('Ask Grow AI'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _QuickAction {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  const _QuickAction(this.icon, this.label, this.onTap);
+}
+
+class _QuickActions extends StatelessWidget {
+  final List<_QuickAction> actions;
+  const _QuickActions({required this.actions});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: actions
+          .map((a) => Expanded(
+                child: Semantics(
+                  button: true,
+                  label: 'Add ${a.label.toLowerCase()}',
+                  excludeSemantics: true,
+                  child: InkWell(
+                    onTap: a.onTap,
+                    borderRadius: AppRadius.mdAll,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
+                      child: Column(
+                        children: [
+                          Container(
+                            width: 52,
+                            height: 52,
+                            decoration: BoxDecoration(
+                              color: context.scheme.surface,
+                              borderRadius: AppRadius.lgAll,
+                              border: Border.all(color: context.colors.border),
+                            ),
+                            child: Icon(a.icon, color: context.scheme.primary, size: AppSizes.iconLg),
+                          ),
+                          const SizedBox(height: AppSpacing.xs),
+                          Text(
+                            a.label,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: context.text.labelSmall?.copyWith(color: context.colors.textPrimary),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ))
+          .toList(),
+    );
+  }
+}
+
+class _UpNextTask extends StatelessWidget {
+  final Todo todo;
+  final VoidCallback? onToggle;
+  final VoidCallback onTap;
+
+  const _UpNextTask({required this.todo, required this.onToggle, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final due = todo.dueDate;
+    String? when;
+    if (due != null) {
+      final now = DateTime.now();
+      final hasTime = due.hour != 0 || due.minute != 0;
+      if (DateUtils.isSameDay(due, now)) {
+        when = hasTime ? 'Today, ${DateFormat('h:mm a').format(due)}' : 'Today';
+      } else if (DateUtils.isSameDay(due, now.add(const Duration(days: 1)))) {
+        when = hasTime ? 'Tomorrow, ${DateFormat('h:mm a').format(due)}' : 'Tomorrow';
+      } else {
+        when = DateFormat('EEE, d MMM').format(due);
+      }
+    }
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(AppSpacing.xxs, AppSpacing.xxs, AppSpacing.md, AppSpacing.xxs),
+        child: Row(
+          children: [
+            Checkbox(value: todo.completed, onChanged: onToggle == null ? null : (_) => onToggle!()),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(todo.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: context.text.titleSmall),
+                  if (when != null) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      when,
+                      style: context.text.labelSmall?.copyWith(
+                        color: todo.isInGracePeriod ? context.colors.warning : null,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(width: AppSpacing.xs),
+            PriorityBadge(priority: todo.priority, compact: true),
+          ],
         ),
       ),
+    );
+  }
+}
+
+class _UpNextReminder extends StatelessWidget {
+  final String title;
+  final String time;
+  final VoidCallback onTap;
+
+  const _UpNextReminder({required this.title, required this.time, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
+        child: Row(
+          children: [
+            Icon(Icons.notifications_none_rounded, size: AppSizes.iconMd, color: context.colors.textSecondary),
+            const SizedBox(width: AppSpacing.md),
+            Expanded(child: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: context.text.bodyMedium)),
+            const SizedBox(width: AppSpacing.xs),
+            Text(time, style: context.text.labelMedium?.copyWith(color: context.colors.textSecondary)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _StepsSummaryCard extends StatelessWidget {
+  final int steps;
+  final int goal;
+  final double calories;
+  final double distanceKm;
+  final VoidCallback onTap;
+
+  const _StepsSummaryCard({
+    required this.steps,
+    required this.goal,
+    required this.calories,
+    required this.distanceKm,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final progress = goal > 0 ? (steps / goal).clamp(0.0, 1.0) : 0.0;
+    final nf = NumberFormat('#,###');
+    return AppCard(
+      onTap: onTap,
+      semanticLabel: 'Steps today: ${nf.format(steps)} of ${nf.format(goal)}',
+      child: Row(
+        children: [
+          ProgressRing(
+            value: progress,
+            size: 64,
+            strokeWidth: 7,
+            child: Icon(Icons.directions_walk_rounded, color: context.scheme.primary, size: AppSizes.iconLg),
+          ),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Steps today', style: context.text.labelSmall),
+                const SizedBox(height: 2),
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text.rich(TextSpan(children: [
+                    TextSpan(text: nf.format(steps), style: context.text.headlineMedium),
+                    TextSpan(text: '  / ${nf.format(goal)}', style: context.text.bodySmall),
+                  ])),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '${calories.toStringAsFixed(0)} kcal · ${distanceKm.toStringAsFixed(1)} km',
+                  style: context.text.labelSmall,
+                ),
+              ],
+            ),
+          ),
+          Icon(Icons.chevron_right_rounded, color: context.colors.textSecondary),
+        ],
+      ),
+    );
+  }
+}
+
+class _ToolRow extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String detail;
+  final VoidCallback onTap;
+  final bool showDivider;
+
+  const _ToolRow({
+    required this.icon,
+    required this.title,
+    required this.detail,
+    required this.onTap,
+    this.showDivider = true,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        ListTile(
+          onTap: onTap,
+          shape: const RoundedRectangleBorder(),
+          leading: IconBadge(icon: icon, size: 36),
+          title: Text(title),
+          subtitle: Text(detail, maxLines: 1, overflow: TextOverflow.ellipsis),
+          trailing: Icon(Icons.chevron_right_rounded, color: context.colors.textSecondary),
+        ),
+        if (showDivider) const Divider(indent: 68),
+      ],
     );
   }
 }

@@ -1,47 +1,61 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:intl/intl.dart';
 import '../providers/app_providers.dart';
 import '../models/todo.dart';
-import '../utils/app_colors.dart';
-import '../widgets/empty_state.dart';
+import '../widgets/ds/ds.dart';
 import '../widgets/global_task_tracker_bar.dart';
+import '../widgets/todo_widgets.dart';
 import 'forms/todo_form.dart';
 import 'task_report_screen.dart';
 
 class TodosScreen extends StatefulWidget {
-  const TodosScreen({super.key});
+  /// Open on the Goals tab instead of Tasks.
+  final bool initialGoals;
+
+  const TodosScreen({super.key, this.initialGoals = false});
 
   @override
   State<TodosScreen> createState() => _TodosScreenState();
 }
 
-class _TodosScreenState extends State<TodosScreen>
-    with SingleTickerProviderStateMixin {
-  int _selectedMainTab = 0; // 0=Tasks, 1=Goals
+class _TodosScreenState extends State<TodosScreen> {
+  late int _selectedMainTab = widget.initialGoals ? 1 : 0; // 0=Tasks, 1=Goals
   int _selectedStatusFilter = 0; // 0=Scheduled/Active, 1=Completed, 2=Missed/Overdue, 3=All
   int _selectedPriorityFilter = 0; // 0=All, 1=Urgent&Important, 2=Important, 3=Urgent, 4=Low
   String _searchQuery = '';
+  final _searchController = TextEditingController();
 
-  static const _priorityLabels = {
-    1: ('Urgent & Important', AppColors.error),
-    2: ('Important', AppColors.warning),
-    3: ('Urgent', AppColors.secondary),
-    4: ('Low Priority', AppColors.lightTextSecondary),
-  };
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
 
-  String _formatTrackedTime(int sec) {
-    final h = sec ~/ 3600;
-    final m = (sec % 3600) ~/ 60;
-    if (h > 0) {
-      return '${h}h ${m}m';
+  Future<void> _add(AuthProvider auth, TodoProvider todoProvider) async {
+    final t = await TodoForm.show(context);
+    if (t != null && auth.uid != null) {
+      t.uid = auth.uid!;
+      await todoProvider.addTodo(t);
     }
-    return '${m}m';
+  }
+
+  Future<bool> _confirmDelete(Todo t) {
+    return ConfirmDialog.show(
+      context,
+      title: t.isGoal ? 'Delete goal?' : 'Delete task?',
+      message: '"${t.title}" will be removed. This can\'t be undone.',
+      confirmLabel: 'Delete',
+      destructive: true,
+    );
+  }
+
+  void _afterDelete(TodoProvider todoProvider, Todo t) {
+    todoProvider.deleteTodo(t.id);
+    AppSnack.show(context, 'Deleted "${t.title}"');
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final auth = context.watch<AuthProvider>();
     final todoProvider = context.watch<TodoProvider>();
 
@@ -55,26 +69,11 @@ class _TodosScreenState extends State<TodosScreen>
     final missedOrOverdue = isGoalsTab ? todoProvider.missedGoals : todoProvider.missedTasks;
     final all = currentDomainList;
 
-    final statusFilters = isGoalsTab
-        ? [
-            'Active (${scheduledOrActive.length})',
-            'Completed (${completed.length})',
-            'Overdue (${missedOrOverdue.length})',
-            'All (${all.length})',
-          ]
-        : [
-            'Scheduled (${scheduledOrActive.length})',
-            'Completed (${completed.length})',
-            'Missed (${missedOrOverdue.length})',
-            'All (${all.length})',
-          ];
-
-    final priorityFilters = [
-      'All Priorities',
-      '🚨 Urgent & Important',
-      '⭐ Important',
-      '⚡ Urgent',
-      '🌱 Low Priority',
+    final statusFilters = [
+      FilterOption(isGoalsTab ? 'Active' : 'Scheduled', count: scheduledOrActive.length),
+      FilterOption('Completed', count: completed.length),
+      FilterOption(isGoalsTab ? 'Overdue' : 'Missed', count: missedOrOverdue.length),
+      FilterOption('All', count: all.length),
     ];
 
     List<Todo> sourceList;
@@ -94,7 +93,7 @@ class _TodosScreenState extends State<TodosScreen>
         break;
     }
 
-    List<Todo> filtered = sourceList.where((t) {
+    final filtered = sourceList.where((t) {
       if (_searchQuery.isNotEmpty) {
         if (!t.title.toLowerCase().contains(_searchQuery.toLowerCase()) &&
             !t.description.toLowerCase().contains(_searchQuery.toLowerCase())) {
@@ -107,633 +106,269 @@ class _TodosScreenState extends State<TodosScreen>
       return true;
     }).toList();
 
+    final noun = isGoalsTab ? 'goal' : 'task';
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Tasks & Goals'),
+        title: const Text('Tasks & goals'),
         actions: [
           IconButton(
-            tooltip: 'Reports & Analytics',
-            icon: Container(
-              padding: const EdgeInsets.all(6),
-              decoration: BoxDecoration(
-                color: AppColors.tasks.withValues(alpha: 0.15),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(Icons.insights_rounded,
-                  color: AppColors.tasks, size: 20),
+            tooltip: 'Reports',
+            icon: const Icon(Icons.insights_rounded),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const TaskReportScreen()),
             ),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const TaskReportScreen()),
-              );
-            },
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: AppSpacing.xxs),
         ],
       ),
-      floatingActionButton: FloatingActionButton(
-        backgroundColor: isGoalsTab ? AppColors.secondary : AppColors.tasks,
-        foregroundColor: Colors.white,
-        elevation: 3,
-        onPressed: () async {
-          final t = await TodoForm.show(context);
-          if (t != null && auth.uid != null) {
-            t.uid = auth.uid!;
-            await todoProvider.addTodo(t);
-          }
-        },
-        child: const Icon(Icons.add_rounded, size: 28),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => _add(auth, todoProvider),
+        icon: const Icon(Icons.add_rounded),
+        label: Text('Add $noun'),
       ),
       body: Column(
         children: [
           const GlobalTaskTrackerBar(),
-
-          Expanded(
-            child: Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 800),
-                child: Column(
-                  children: [
-                    const SizedBox(height: 8),
-
-                    // ── 1. Top Segmented Switcher: [ Tasks ] [ Goals ] ────────
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: Container(
-                        height: 48,
-                        padding: const EdgeInsets.all(4),
-                        decoration: BoxDecoration(
-                          color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(color: theme.dividerColor.withValues(alpha: 0.3)),
-                        ),
-                        child: Row(
-                          children: [
-                            // Tasks Tab
-                            Expanded(
-                              child: InkWell(
-                                onTap: () => setState(() {
-                                  _selectedMainTab = 0;
-                                  _selectedStatusFilter = 0;
-                                }),
-                                borderRadius: BorderRadius.circular(10),
-                                child: Container(
-                                  alignment: Alignment.center,
-                                  decoration: BoxDecoration(
-                                    color: _selectedMainTab == 0
-                                        ? AppColors.tasks
-                                        : Colors.transparent,
-                                    borderRadius: BorderRadius.circular(10),
-                                    boxShadow: _selectedMainTab == 0
-                                        ? [
-                                            BoxShadow(
-                                              color: AppColors.tasks.withValues(alpha: 0.3),
-                                              blurRadius: 6,
-                                              offset: const Offset(0, 2),
-                                            )
-                                          ]
-                                        : null,
-                                  ),
-                                  child: Row(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Icon(
-                                        Icons.task_alt_rounded,
-                                        size: 18,
-                                        color: _selectedMainTab == 0
-                                            ? Colors.white
-                                            : theme.colorScheme.onSurface.withValues(alpha: 0.7),
-                                      ),
-                                      const SizedBox(width: 6),
-                                      Flexible(
-                                        child: FittedBox(
-                                          fit: BoxFit.scaleDown,
-                                          child: Text(
-                                            'Tasks (${todoProvider.tasks.length})',
-                                            style: TextStyle(
-                                              fontSize: 14,
-                                              fontWeight: FontWeight.bold,
-                                              color: _selectedMainTab == 0
-                                                  ? Colors.white
-                                                  : theme.colorScheme.onSurface.withValues(alpha: 0.7),
-                                            ),
-                                            maxLines: 1,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 4),
-                            // Goals Tab
-                            Expanded(
-                              child: InkWell(
-                                onTap: () => setState(() {
-                                  _selectedMainTab = 1;
-                                  _selectedStatusFilter = 0;
-                                }),
-                                borderRadius: BorderRadius.circular(10),
-                                child: Container(
-                                  alignment: Alignment.center,
-                                  decoration: BoxDecoration(
-                                    color: _selectedMainTab == 1
-                                        ? AppColors.secondary
-                                        : Colors.transparent,
-                                    borderRadius: BorderRadius.circular(10),
-                                    boxShadow: _selectedMainTab == 1
-                                        ? [
-                                            BoxShadow(
-                                              color: AppColors.secondary.withValues(alpha: 0.3),
-                                              blurRadius: 6,
-                                              offset: const Offset(0, 2),
-                                            )
-                                          ]
-                                        : null,
-                                  ),
-                                  child: Row(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Icon(
-                                        Icons.flag_rounded,
-                                        size: 18,
-                                        color: _selectedMainTab == 1
-                                            ? Colors.white
-                                            : theme.colorScheme.onSurface.withValues(alpha: 0.7),
-                                      ),
-                                      const SizedBox(width: 6),
-                                      Flexible(
-                                        child: FittedBox(
-                                          fit: BoxFit.scaleDown,
-                                          child: Text(
-                                            'Goals (${todoProvider.goals.length})',
-                                            style: TextStyle(
-                                              fontSize: 14,
-                                              fontWeight: FontWeight.bold,
-                                              color: _selectedMainTab == 1
-                                                  ? Colors.white
-                                                  : theme.colorScheme.onSurface.withValues(alpha: 0.7),
-                                            ),
-                                            maxLines: 1,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-
-                    // ── 2. Search Bar ─────────────────────────────────────────
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                      child: TextField(
-                        decoration: InputDecoration(
-                          hintText: isGoalsTab ? 'Search goals...' : 'Search tasks...',
-                          prefixIcon: const Icon(Icons.search_rounded, size: 20),
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                          suffixIcon: _searchQuery.isNotEmpty
-                              ? IconButton(
-                                  icon: const Icon(Icons.clear_rounded, size: 18),
-                                  onPressed: () => setState(() => _searchQuery = ''),
-                                )
-                              : null,
-                        ),
-                        onChanged: (val) => setState(() => _searchQuery = val),
-                      ),
-                    ),
-
-                    // ── 3. Status Filters: Scheduled/Active -> Completed -> Missed -> All ──
-                    SizedBox(
-                      height: 42,
-                      child: ListView.builder(
-                        scrollDirection: Axis.horizontal,
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        itemCount: statusFilters.length,
-                        itemBuilder: (context, i) {
-                          final isSelected = _selectedStatusFilter == i;
-                          final isMissedTab = i == 2;
-                          final activeColor = isGoalsTab ? AppColors.secondary : AppColors.tasks;
-
-                          return Padding(
-                            padding: const EdgeInsets.only(right: 8),
-                            child: ChoiceChip(
-                              label: Text(statusFilters[i]),
-                              selected: isSelected,
-                              selectedColor: isMissedTab
-                                  ? AppColors.error.withValues(alpha: 0.2)
-                                  : activeColor.withValues(alpha: 0.2),
-                              labelStyle: TextStyle(
-                                fontSize: 12,
-                                fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-                                color: isSelected
-                                    ? (isMissedTab ? AppColors.error : activeColor)
-                                    : theme.colorScheme.onSurface.withValues(alpha: 0.7),
-                              ),
-                              onSelected: (_) => setState(() => _selectedStatusFilter = i),
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-
-                    // ── 4. Priority Filter Pills (No Q1, Q2, Q3, Q4) ────────────
-                    SizedBox(
-                      height: 36,
-                      child: ListView.builder(
-                        scrollDirection: Axis.horizontal,
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        itemCount: priorityFilters.length,
-                        itemBuilder: (context, i) {
-                          final isSelected = _selectedPriorityFilter == i;
-                          return Padding(
-                            padding: const EdgeInsets.only(right: 6),
-                            child: FilterChip(
-                              label: Text(
-                                priorityFilters[i],
-                                style: TextStyle(
-                                  fontSize: 11.5,
-                                  fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-                                  color: isSelected
-                                      ? (i == 1
-                                          ? AppColors.error
-                                          : i == 2
-                                              ? AppColors.warning
-                                              : i == 3
-                                                  ? AppColors.secondary
-                                                  : i == 4
-                                                      ? AppColors.lightTextSecondary
-                                                      : (isGoalsTab ? AppColors.secondary : AppColors.tasks))
-                                      : theme.colorScheme.onSurface.withValues(alpha: 0.6),
-                                ),
-                              ),
-                              selected: isSelected,
-                              onSelected: (_) => setState(() => _selectedPriorityFilter = i),
-                              showCheckmark: false,
-                              padding: const EdgeInsets.symmetric(horizontal: 4),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(16),
-                                side: BorderSide(
-                                  color: isSelected
-                                      ? (isGoalsTab ? AppColors.secondary : AppColors.tasks).withValues(alpha: 0.5)
-                                      : theme.dividerColor.withValues(alpha: 0.4),
-                                ),
-                              ),
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-
-                    // ── 5. Items List View ────────────────────────────────────
-                    Expanded(
-                      child: filtered.isEmpty
-                          ? EmptyState(
-                              icon: isGoalsTab ? Icons.flag_rounded : Icons.task_alt_rounded,
-                              title: _selectedStatusFilter == 0
-                                  ? (isGoalsTab ? 'No Active Goals' : 'No Scheduled Tasks')
-                                  : _selectedStatusFilter == 1
-                                      ? (isGoalsTab ? 'No Completed Goals Yet' : 'No Completed Tasks Yet')
-                                      : _selectedStatusFilter == 2
-                                          ? (isGoalsTab ? 'No Overdue Goals!' : 'No Missed Deadlines!')
-                                          : (isGoalsTab ? 'No Goals Found' : 'No Tasks Found'),
-                              subtitle: _selectedStatusFilter == 2
-                                  ? (isGoalsTab ? 'All your goals are on track!' : 'Great job keeping up with all your deadlines!')
-                                  : (isGoalsTab ? 'Tap Add Goal to set a long-term milestone (> 7 days).' : 'Tap Add Task to create an actionable task (<= 7 days).'),
-                              action: _selectedStatusFilter != 2
-                                  ? FilledButton(
-                                      onPressed: () async {
-                                        final t = await TodoForm.show(context);
-                                        if (t != null && auth.uid != null) {
-                                          t.uid = auth.uid!;
-                                          await todoProvider.addTodo(t);
-                                        }
-                                      },
-                                      style: FilledButton.styleFrom(
-                                        backgroundColor: isGoalsTab ? AppColors.secondary : AppColors.tasks,
-                                        foregroundColor: Colors.white,
-                                        shape: const CircleBorder(),
-                                        padding: const EdgeInsets.all(16),
-                                      ),
-                                      child: const Icon(Icons.add_rounded, size: 28),
-                                    )
-                                  : null,
-                            )
-                          : ListView.builder(
-                              padding: const EdgeInsets.fromLTRB(16, 4, 16, 80),
-                              itemCount: filtered.length,
-                              itemBuilder: (context, i) {
-                                final t = filtered[i];
-                                final priority = _priorityLabels[t.priority] ??
-                                    ('Low Priority', AppColors.lightTextSecondary);
-                                final isMissed = t.isMissed;
-                                final inGrace = t.isInGracePeriod;
-
-                                return Dismissible(
-                                  key: Key(t.id),
-                                  direction: DismissDirection.endToStart,
-                                  confirmDismiss: (direction) async {
-                                    final confirmed = await showDialog<bool>(
-                                      context: context,
-                                      builder: (ctx) => AlertDialog(
-                                        title: Text(t.isGoal ? 'Delete Goal?' : 'Delete Task?'),
-                                        content: Text('Are you sure you want to delete "${t.title}"?'),
-                                        actions: [
-                                          TextButton(
-                                            onPressed: () => Navigator.pop(ctx, false),
-                                            child: const Text('Cancel'),
-                                          ),
-                                          FilledButton(
-                                            style: FilledButton.styleFrom(
-                                              backgroundColor: AppColors.error,
-                                              foregroundColor: Colors.white,
-                                            ),
-                                            onPressed: () => Navigator.pop(ctx, true),
-                                            child: const Text('Yes, Delete'),
-                                          ),
-                                        ],
-                                      ),
-                                    );
-                                    return confirmed == true;
-                                  },
-                                  background: Container(
-                                    alignment: Alignment.centerRight,
-                                    padding: const EdgeInsets.only(right: 20),
-                                    decoration: BoxDecoration(
-                                      color: AppColors.error,
-                                      borderRadius: BorderRadius.circular(16),
-                                    ),
-                                    child: const Icon(Icons.delete_rounded, color: Colors.white),
-                                  ),
-                                  onDismissed: (_) {
-                                    todoProvider.deleteTodo(t.id);
-                                    ScaffoldMessenger.of(context).clearSnackBars();
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(
-                                        content: Text('Deleted "${t.title}"'),
-                                        duration: const Duration(milliseconds: 1800),
-                                        behavior: SnackBarBehavior.floating,
-                                        dismissDirection: DismissDirection.horizontal,
-                                        onVisible: () {
-                                          Future.delayed(const Duration(milliseconds: 1800), () {
-                                            if (context.mounted) {
-                                              ScaffoldMessenger.of(context).hideCurrentSnackBar();
-                                            }
-                                          });
-                                        },
-                                      ),
-                                    );
-                                  },
-                                  child: Card(
-                                    margin: const EdgeInsets.only(bottom: 10),
-                                    child: Padding(
-                                      padding: const EdgeInsets.all(14),
-                                      child: Row(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          // Checkbox
-                                          Transform.scale(
-                                            scale: 1.1,
-                                            child: Checkbox(
-                                              value: t.completed,
-                                              shape: RoundedRectangleBorder(
-                                                borderRadius: BorderRadius.circular(6),
-                                              ),
-                                              activeColor: AppColors.success,
-                                              onChanged: t.canComplete
-                                                  ? (_) => todoProvider.toggleCompleted(t)
-                                                  : null,
-                                            ),
-                                          ),
-                                          const SizedBox(width: 8),
-
-                                          // Details
-                                          Expanded(
-                                            child: Column(
-                                              crossAxisAlignment: CrossAxisAlignment.start,
-                                              children: [
-                                                Text(
-                                                  t.title,
-                                                  style: theme.textTheme.titleSmall?.copyWith(
-                                                    fontWeight: FontWeight.w700,
-                                                    fontSize: 15,
-                                                    decoration: t.completed ? TextDecoration.lineThrough : null,
-                                                    color: t.completed
-                                                        ? theme.colorScheme.onSurface.withValues(alpha: 0.45)
-                                                        : null,
-                                                  ),
-                                                ),
-                                                if (t.description.isNotEmpty) ...[
-                                                  const SizedBox(height: 3),
-                                                  Text(
-                                                    t.description,
-                                                    maxLines: 1,
-                                                    overflow: TextOverflow.ellipsis,
-                                                    style: theme.textTheme.bodySmall,
-                                                  ),
-                                                ],
-                                                const SizedBox(height: 8),
-                                                Wrap(
-                                                  spacing: 6,
-                                                  runSpacing: 4,
-                                                  crossAxisAlignment: WrapCrossAlignment.center,
-                                                  children: [
-                                                    // Missed / Overdue Tag
-                                                    if (isMissed) ...[
-                                                      Container(
-                                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                                        decoration: BoxDecoration(
-                                                          color: AppColors.error.withValues(alpha: 0.15),
-                                                          borderRadius: BorderRadius.circular(8),
-                                                          border: Border.all(color: AppColors.error.withValues(alpha: 0.4)),
-                                                        ),
-                                                        child: Row(
-                                                          mainAxisSize: MainAxisSize.min,
-                                                          children: [
-                                                            const Icon(Icons.warning_amber_rounded, size: 12, color: AppColors.error),
-                                                            const SizedBox(width: 3),
-                                                            Text(
-                                                              isGoalsTab ? 'Overdue' : 'Missed',
-                                                              style: const TextStyle(
-                                                                fontSize: 10.5,
-                                                                fontWeight: FontWeight.w800,
-                                                                color: AppColors.error,
-                                                              ),
-                                                            ),
-                                                          ],
-                                                        ),
-                                                      ),
-                                                    ],
-
-                                                    // Grace Period Tag (for Tasks)
-                                                    if (inGrace) ...[
-                                                      Builder(builder: (ctx) {
-                                                        final remaining = t.absoluteDeadline!.difference(DateTime.now());
-                                                        final hLeft = remaining.inHours;
-                                                        final mLeft = remaining.inMinutes % 60;
-                                                        final label = hLeft > 0
-                                                            ? '⏳ ${hLeft}h ${mLeft}m left'
-                                                            : '⏳ ${mLeft}m left';
-                                                        return Container(
-                                                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                                          decoration: BoxDecoration(
-                                                            color: Colors.orange.withValues(alpha: 0.15),
-                                                            borderRadius: BorderRadius.circular(8),
-                                                            border: Border.all(color: Colors.orange.withValues(alpha: 0.4)),
-                                                          ),
-                                                          child: Text(
-                                                            label,
-                                                            style: const TextStyle(
-                                                              fontSize: 10.5,
-                                                              fontWeight: FontWeight.w700,
-                                                              color: Colors.orange,
-                                                            ),
-                                                          ),
-                                                        );
-                                                      }),
-                                                    ],
-
-                                                    // Category Tag
-                                                    Container(
-                                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                                      decoration: BoxDecoration(
-                                                        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-                                                        borderRadius: BorderRadius.circular(8),
-                                                      ),
-                                                      child: Text(
-                                                        t.category,
-                                                        style: TextStyle(
-                                                          fontSize: 10.5,
-                                                          color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
-                                                        ),
-                                                      ),
-                                                    ),
-
-                                                    // Priority Tag (Clean name: Urgent & Important, Important, Urgent, Low Priority)
-                                                    Container(
-                                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                                      decoration: BoxDecoration(
-                                                        color: priority.$2.withValues(alpha: 0.15),
-                                                        borderRadius: BorderRadius.circular(8),
-                                                      ),
-                                                      child: Text(
-                                                        priority.$1,
-                                                        style: TextStyle(
-                                                          fontSize: 10.5,
-                                                          fontWeight: FontWeight.w600,
-                                                          color: priority.$2,
-                                                        ),
-                                                      ),
-                                                    ),
-
-                                                    // Tracked Time Tag
-                                                    if (t.timeSpentSeconds > 0)
-                                                      Container(
-                                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                                        decoration: BoxDecoration(
-                                                          color: AppColors.primary.withValues(alpha: 0.15),
-                                                          borderRadius: BorderRadius.circular(8),
-                                                        ),
-                                                        child: Row(
-                                                          mainAxisSize: MainAxisSize.min,
-                                                          children: [
-                                                            const Icon(Icons.timer_outlined, size: 11, color: AppColors.primary),
-                                                            const SizedBox(width: 3),
-                                                            Text(
-                                                              _formatTrackedTime(t.timeSpentSeconds),
-                                                              style: const TextStyle(
-                                                                fontSize: 10.5,
-                                                                fontWeight: FontWeight.w600,
-                                                                color: AppColors.primary,
-                                                              ),
-                                                            ),
-                                                          ],
-                                                        ),
-                                                      ),
-                                                  ],
-                                                ),
-                                                const SizedBox(height: 6),
-
-                                                // Due Date & Time
-                                                if (t.dueDate != null)
-                                                  Text(
-                                                    (t.dueDate!.hour != 0 || t.dueDate!.minute != 0)
-                                                        ? 'Due: ${DateFormat('MMM d, yyyy h:mm a').format(t.dueDate!)}'
-                                                        : 'Due: ${DateFormat('MMM d, yyyy').format(t.dueDate!)}',
-                                                    style: TextStyle(
-                                                      fontSize: 11,
-                                                      color: isMissed
-                                                          ? AppColors.error
-                                                          : theme.colorScheme.onSurface.withValues(alpha: 0.5),
-                                                      fontWeight: isMissed ? FontWeight.w600 : FontWeight.normal,
-                                                    ),
-                                                  ),
-                                              ],
-                                            ),
-                                          ),
-
-                                          // Trailing Actions (Edit / Track)
-                                          Column(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              IconButton(
-                                                icon: const Icon(Icons.edit_outlined, size: 18),
-                                                padding: EdgeInsets.zero,
-                                                constraints: const BoxConstraints(),
-                                                onPressed: () async {
-                                                  final updated = await TodoForm.show(context, initial: t);
-                                                  if (updated != null) {
-                                                    await todoProvider.updateTodo(updated);
-                                                  }
-                                                },
-                                              ),
-                                              const SizedBox(height: 8),
-                                              Consumer<TaskTrackerProvider>(
-                                                builder: (context, tracker, _) {
-                                                  final isTracking = tracker.activeTodo?.id == t.id;
-                                                  return IconButton(
-                                                    icon: Icon(
-                                                      isTracking ? Icons.stop_circle_rounded : Icons.play_circle_outline_rounded,
-                                                      color: isTracking ? AppColors.error : AppColors.primary,
-                                                      size: 24,
-                                                    ),
-                                                    padding: EdgeInsets.zero,
-                                                    constraints: const BoxConstraints(),
-                                                    onPressed: () {
-                                                      if (isTracking) {
-                                                        tracker.finish(context);
-                                                      } else {
-                                                        tracker.startTracking(t);
-                                                      }
-                                                    },
-                                                  );
-                                                },
-                                              ),
-                                            ],
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                );
-                              },
-                            ),
-                    ),
-                  ],
+          ContentWidth(
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(AppSpacing.screen, AppSpacing.xxs, AppSpacing.screen, AppSpacing.sm),
+                  child: AppSegmented<int>(
+                    segments: {
+                      0: 'Tasks · ${todoProvider.tasks.length}',
+                      1: 'Goals · ${todoProvider.goals.length}',
+                    },
+                    icons: const {0: Icons.task_alt_rounded, 1: Icons.flag_outlined},
+                    selected: _selectedMainTab,
+                    onChanged: (v) => setState(() {
+                      _selectedMainTab = v;
+                      _selectedStatusFilter = 0;
+                    }),
+                  ),
                 ),
-              ),
+                Padding(
+                  padding: AppSpacing.screenPadding,
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _searchController,
+                          textInputAction: TextInputAction.search,
+                          decoration: InputDecoration(
+                            hintText: 'Search ${noun}s',
+                            prefixIcon: const Icon(Icons.search_rounded, size: AppSizes.iconMd),
+                            contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                            suffixIcon: _searchQuery.isNotEmpty
+                                ? IconButton(
+                                    tooltip: 'Clear search',
+                                    icon: const Icon(Icons.close_rounded, size: AppSizes.iconMd),
+                                    onPressed: () => setState(() {
+                                      _searchQuery = '';
+                                      _searchController.clear();
+                                    }),
+                                  )
+                                : null,
+                          ),
+                          onChanged: (val) => setState(() => _searchQuery = val),
+                        ),
+                      ),
+                      const SizedBox(width: AppSpacing.xs),
+                      _PriorityFilterButton(
+                        value: _selectedPriorityFilter,
+                        onChanged: (v) => setState(() => _selectedPriorityFilter = v),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.xs),
+                FilterBar(
+                  options: statusFilters,
+                  selectedIndex: _selectedStatusFilter,
+                  onSelected: (i) => setState(() => _selectedStatusFilter = i),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: AppSpacing.xs),
+          Expanded(
+            child: AnimatedSwitcher(
+              duration: AppMotion.medium,
+              child: filtered.isEmpty
+                  ? _buildEmpty(isGoalsTab, auth, todoProvider)
+                  : ContentWidth(
+                      key: ValueKey('list-$_selectedMainTab-$_selectedStatusFilter'),
+                      child: ListView.separated(
+                        padding: const EdgeInsets.fromLTRB(
+                            AppSpacing.screen, AppSpacing.xxs, AppSpacing.screen, AppSpacing.fabClearance),
+                        itemCount: filtered.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: AppSpacing.sm),
+                        itemBuilder: (context, i) => _buildItem(filtered[i], todoProvider),
+                      ),
+                    ),
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildEmpty(bool isGoalsTab, AuthProvider auth, TodoProvider todoProvider) {
+    final filtering = _searchQuery.isNotEmpty || _selectedPriorityFilter > 0;
+    String title;
+    String subtitle;
+    IconData icon = isGoalsTab ? Icons.flag_outlined : Icons.task_alt_rounded;
+    if (filtering) {
+      title = 'No matches';
+      subtitle = 'Try a different search or priority filter.';
+      icon = Icons.search_off_rounded;
+    } else {
+      switch (_selectedStatusFilter) {
+        case 0:
+          title = isGoalsTab ? 'No active goals' : 'No scheduled tasks';
+          subtitle = isGoalsTab
+              ? 'Goals are items with a deadline more than 7 days away.'
+              : 'Tasks are items due within the next 7 days.';
+          break;
+        case 1:
+          title = 'Nothing completed yet';
+          subtitle = 'Completed ${isGoalsTab ? 'goals' : 'tasks'} will show up here.';
+          break;
+        case 2:
+          title = isGoalsTab ? 'No overdue goals' : 'No missed tasks';
+          subtitle = 'You\'re on track. Nice work.';
+          icon = Icons.verified_outlined;
+          break;
+        default:
+          title = isGoalsTab ? 'No goals yet' : 'No tasks yet';
+          subtitle = 'Add your first ${isGoalsTab ? 'goal' : 'task'} to get started.';
+      }
+    }
+    final showAdd = !filtering && _selectedStatusFilter != 2;
+    return EmptyState(
+      key: ValueKey('empty-$_selectedMainTab-$_selectedStatusFilter'),
+      icon: icon,
+      title: title,
+      subtitle: subtitle,
+      action: showAdd
+          ? FilledButton.tonalIcon(
+              onPressed: () => _add(auth, todoProvider),
+              icon: const Icon(Icons.add_rounded, size: AppSizes.iconMd),
+              label: Text(isGoalsTab ? 'Add goal' : 'Add task'),
+            )
+          : null,
+    );
+  }
+
+  Widget _buildItem(Todo t, TodoProvider todoProvider) {
+    final actions = Consumer<TaskTrackerProvider>(
+      builder: (context, tracker, _) {
+        final isTracking = tracker.activeTodo?.id == t.id;
+        return TodoActions(
+          isTracking: isTracking,
+          onTrack: () {
+            if (isTracking) {
+              tracker.finish(context);
+            } else {
+              tracker.startTracking(t);
+            }
+          },
+          onEdit: () async {
+            final updated = await TodoForm.show(context, initial: t);
+            if (updated != null) {
+              await todoProvider.updateTodo(updated);
+            }
+          },
+          onDelete: () async {
+            if (await _confirmDelete(t) && mounted) _afterDelete(todoProvider, t);
+          },
+        );
+      },
+    );
+    final onToggle = t.canComplete ? () => todoProvider.toggleCompleted(t) : null;
+
+    return Dismissible(
+      key: Key(t.id),
+      direction: DismissDirection.endToStart,
+      confirmDismiss: (_) => _confirmDelete(t),
+      background: Container(
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.only(right: AppSpacing.lg),
+        decoration: BoxDecoration(color: context.colors.errorContainer, borderRadius: AppRadius.lgAll),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('Delete', style: context.text.labelMedium?.copyWith(color: context.colors.error)),
+            const SizedBox(width: AppSpacing.xs),
+            Icon(Icons.delete_outline_rounded, color: context.colors.error),
+          ],
+        ),
+      ),
+      onDismissed: (_) => _afterDelete(todoProvider, t),
+      child: t.isGoal
+          ? GoalProgressCard(goal: t, onToggle: onToggle, actions: actions)
+          : TaskCard(todo: t, onToggle: onToggle, actions: actions),
+    );
+  }
+}
+
+class _PriorityFilterButton extends StatelessWidget {
+  final int value;
+  final ValueChanged<int> onChanged;
+
+  const _PriorityFilterButton({required this.value, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    final active = value > 0;
+    final label = active ? PriorityStyle.of(value).shortLabel : 'Priority';
+    return PopupMenuButton<int>(
+      tooltip: 'Filter by priority',
+      initialValue: value,
+      onSelected: onChanged,
+      itemBuilder: (_) => [
+        const PopupMenuItem(value: 0, child: Text('All priorities')),
+        for (final p in PriorityStyle.all)
+          PopupMenuItem(
+            value: p.level,
+            child: Row(
+              children: [
+                Icon(p.icon, size: AppSizes.iconMd, color: context.colors.toneColor(p.tone, context.scheme)),
+                const SizedBox(width: AppSpacing.sm),
+                Text(p.label),
+              ],
+            ),
+          ),
+      ],
+      child: Container(
+        height: 48,
+        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm),
+        decoration: BoxDecoration(
+          color: active ? context.scheme.primaryContainer : context.scheme.surface,
+          borderRadius: AppRadius.mdAll,
+          border: Border.all(color: active ? context.scheme.primary.withValues(alpha: 0.35) : context.colors.border),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.tune_rounded,
+                size: AppSizes.iconMd, color: active ? context.scheme.onPrimaryContainer : context.colors.textSecondary),
+            const SizedBox(width: AppSpacing.xxs + 2),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 96),
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: context.text.labelMedium?.copyWith(
+                  color: active ? context.scheme.onPrimaryContainer : context.colors.textPrimary,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

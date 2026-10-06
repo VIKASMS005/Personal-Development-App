@@ -2,11 +2,10 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:flutter_animate/flutter_animate.dart';
 import '../models/user_profile.dart';
 import '../providers/app_providers.dart';
-import '../utils/app_colors.dart';
 import '../services/data_export_service.dart';
+import '../widgets/ds/ds.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -35,14 +34,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
       final uid = auth.uid ?? 'local_user';
       context.read<ProfileProvider>().loadProfile(uid).then((_) {
         if (!mounted) return;
-        final profile = context.read<ProfileProvider>().profile;
-        if (profile != null) {
-          _nameCtrl.text = profile.name;
-          _bioCtrl.text = profile.bio;
-          _phoneCtrl.text = profile.phoneNumber;
-        }
+        _fillControllers(context.read<ProfileProvider>().profile);
       });
     });
+  }
+
+  void _fillControllers(UserProfile? profile) {
+    if (profile != null) {
+      _nameCtrl.text = profile.name;
+      _bioCtrl.text = profile.bio;
+      _phoneCtrl.text = profile.phoneNumber;
+    }
   }
 
   @override
@@ -57,67 +59,24 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final picker = ImagePicker();
     final source = await showModalBottomSheet<ImageSource>(
       context: context,
-      backgroundColor: Theme.of(context).cardTheme.color ??
-          Theme.of(context).colorScheme.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: Colors.grey.withValues(alpha: 0.3),
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'Change Profile Photo',
-                style: Theme.of(ctx)
-                    .textTheme
-                    .titleMedium
-                    ?.copyWith(fontWeight: FontWeight.w800),
-              ),
-              const SizedBox(height: 16),
-              ListTile(
-                leading: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: AppColors.primary.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Icon(Icons.camera_alt_rounded,
-                      color: AppColors.primary),
-                ),
-                title: const Text('Take Photo with Camera',
-                    style: TextStyle(fontWeight: FontWeight.w600)),
-                trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 14),
-                onTap: () => Navigator.pop(ctx, ImageSource.camera),
-              ),
-              const SizedBox(height: 4),
-              ListTile(
-                leading: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: AppColors.secondary.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Icon(Icons.photo_library_rounded,
-                      color: AppColors.secondary),
-                ),
-                title: const Text('Choose from Gallery',
-                    style: TextStyle(fontWeight: FontWeight.w600)),
-                trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 14),
-                onTap: () => Navigator.pop(ctx, ImageSource.gallery),
-              ),
-            ],
-          ),
+      builder: (ctx) => SheetScaffold(
+        title: 'Profile photo',
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const IconBadge(icon: Icons.photo_camera_outlined, size: 40),
+              title: const Text('Take a photo'),
+              onTap: () => Navigator.pop(ctx, ImageSource.camera),
+            ),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const IconBadge(icon: Icons.photo_library_outlined, size: 40),
+              title: const Text('Choose from gallery'),
+              onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+            ),
+          ],
         ),
       ),
     );
@@ -134,27 +93,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
           await context.read<ProfileProvider>().updatePhoto(img.path);
           setState(() {});
           if (mounted) {
-            ScaffoldMessenger.of(context).clearSnackBars();
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('✨ Profile photo updated!'),
-                backgroundColor: AppColors.success,
-                duration: Duration(seconds: 2),
-                behavior: SnackBarBehavior.floating,
-              ),
-            );
+            AppSnack.show(context, 'Profile photo updated', tone: StatusTone.success);
           }
         }
       } catch (e) {
+        debugPrint('[ProfileScreen] Image pick failed: $e');
         if (mounted) {
-          ScaffoldMessenger.of(context).clearSnackBars();
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Could not access camera/gallery: $e'),
-              backgroundColor: AppColors.error,
-              duration: const Duration(seconds: 2),
-              behavior: SnackBarBehavior.floating,
-            ),
+          AppSnack.show(
+            context,
+            'Couldn\'t open the camera or gallery. Check app permissions and try again.',
+            tone: StatusTone.error,
+            duration: const Duration(seconds: 3),
           );
         }
       }
@@ -170,584 +119,191 @@ class _ProfileScreenState extends State<ProfileScreen> {
           );
       setState(() => _isEditing = false);
       if (mounted) {
-        ScaffoldMessenger.of(context).clearSnackBars();
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('✅ Profile updated successfully!'),
-            backgroundColor: AppColors.success,
-            duration: Duration(seconds: 2),
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
+        AppSnack.show(context, 'Profile saved', tone: StatusTone.success);
+      }
+    }
+  }
+
+  void _cancelEdit() {
+    _fillControllers(context.read<ProfileProvider>().profile);
+    setState(() => _isEditing = false);
+  }
+
+  /// Shows only the last 4 digits until the user chooses to edit.
+  String _maskedPhone(String phone) {
+    final digits = phone.replaceAll(RegExp(r'\D'), '');
+    if (digits.length <= 4) return phone;
+    return '•••• ${digits.substring(digits.length - 4)}';
+  }
+
+  Future<void> _export(AuthProvider auth) async {
+    final uid = auth.uid ?? 'local_user';
+    final path = await DataExportService.instance.exportToDownloads(uid);
+    if (!mounted) return;
+    if (path != null) {
+      AppSnack.show(context, 'Backup saved to $path', tone: StatusTone.success, duration: const Duration(seconds: 4));
+    } else {
+      AppSnack.show(context, 'Export didn\'t finish. Please try again.', tone: StatusTone.error);
+    }
+  }
+
+  Future<void> _import(AuthProvider auth) async {
+    final confirm = await ConfirmDialog.show(
+      context,
+      title: 'Restore from backup?',
+      message: 'The backup will be merged with your current data. Records with the same ID will be overwritten.\n\n'
+          'Choose a grow_backup_*.json file to continue.',
+      confirmLabel: 'Choose file',
+    );
+    if (!confirm || !mounted) return;
+    final success = await DataExportService.instance.importFromFile(
+      uid: auth.uid ?? 'local_user',
+    );
+    if (!mounted) return;
+    if (success) {
+      // Reload all providers
+      final uid = auth.uid ?? 'local_user';
+      context.read<TodoProvider>().loadTodos(uid);
+      context.read<HabitProvider>().loadHabits(uid);
+      context.read<JournalProvider>().loadJournals(uid);
+      context.read<FinanceProvider>().loadTransactions(uid);
+      context.read<ReminderProvider>().loadReminders(uid);
+      context.read<AlarmProvider>().loadAlarms(uid);
+      AppSnack.show(context, 'Data restored', tone: StatusTone.success);
+    } else {
+      AppSnack.show(context, 'Nothing was restored. The file was cancelled or couldn\'t be read.',
+          tone: StatusTone.error, duration: const Duration(seconds: 3));
+    }
+  }
+
+  Future<void> _reset(AuthProvider auth) async {
+    final ok = await ConfirmDialog.show(
+      context,
+      title: 'Reset all local data?',
+      message: 'This permanently deletes your tasks, habits, focus logs, journal, finances, alarms and routines '
+          'from this device.',
+      confirmLabel: 'Delete everything',
+      destructive: true,
+    );
+    if (ok && mounted) {
+      await auth.resetAllLocalData();
+      if (mounted) {
+        final uid = auth.uid ?? 'local_user';
+        context.read<ProfileProvider>().clear();
+        context.read<TodoProvider>().clear();
+        context.read<HabitProvider>().clear();
+        context.read<JournalProvider>().clear();
+        context.read<FinanceProvider>().clear();
+        context.read<CalendarProvider>().clear();
+        context.read<TimetableProvider>().clear();
+        context.read<ChatbotProvider>().clear();
+        context.read<ReminderProvider>().clear();
+        context.read<AlarmProvider>().clear();
+        context.read<StepProvider>().clear();
+
+        context.read<ProfileProvider>().loadProfile(uid);
+        context.read<TodoProvider>().loadTodos(uid);
+        context.read<HabitProvider>().loadHabits(uid);
+        context.read<JournalProvider>().loadJournals(uid);
+        context.read<FinanceProvider>().loadTransactions(uid);
+        context.read<CalendarProvider>().loadEvents(uid);
+        context.read<TimetableProvider>().loadSlots(uid);
+        context.read<ChatbotProvider>().loadMessages(uid);
+        context.read<ReminderProvider>().loadReminders(uid);
+        context.read<AlarmProvider>().loadAlarms(uid);
+        context.read<StepProvider>().loadStepData(uid);
+
+        AppSnack.show(context, 'All local data has been reset');
       }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final profileProvider = context.watch<ProfileProvider>();
-    final profile = profileProvider.profile;
+    final profile = context.watch<ProfileProvider>().profile;
     final themeProvider = context.watch<ThemeProvider>();
     final auth = context.watch<AuthProvider>();
+    final isDark = context.isDark;
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Profile & Settings'),
-        centerTitle: false,
+        title: const Text('Profile'),
         actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 12),
-            child: FilledButton.tonalIcon(
-              style: FilledButton.styleFrom(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12)),
-              ),
-              icon: Icon(_isEditing ? Icons.check_rounded : Icons.edit_rounded,
-                  size: 16),
-              label: Text(_isEditing ? 'Save' : 'Edit',
-                  style: const TextStyle(fontWeight: FontWeight.w700)),
-              onPressed: () {
-                if (_isEditing) {
-                  _saveProfile();
-                } else {
-                  setState(() => _isEditing = true);
-                }
-              },
+          if (!_isEditing)
+            TextButton(
+              onPressed: () => setState(() => _isEditing = true),
+              child: const Text('Edit'),
             ),
-          ),
+          const SizedBox(width: AppSpacing.xs),
         ],
       ),
-      body: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 680),
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
-            child: Form(
-              key: _formKey,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // 1. Hero Header Card
-                  _buildHeroHeader(profile, theme, isDark)
-                      .animate()
-                      .fadeIn(duration: 400.ms)
-                      .slideY(begin: -0.05, end: 0),
-                  const SizedBox(height: 18),
-
-                  // 2. Personal Information Section Card
-                  _buildSectionCard(
-                    theme: theme,
-                    title: 'Personal Information',
-                    icon: Icons.person_outline_rounded,
-                    iconColor: AppColors.primary,
-                    child: Column(
-                      children: [
-                        // Name Field
-                        _buildInputField(
-                          controller: _nameCtrl,
-                          label: 'Full Name',
-                          hint: 'Enter your name',
-                          icon: Icons.badge_outlined,
-                          iconColor: AppColors.primary,
-                          enabled: _isEditing,
-                          validator: (v) => v == null || v.trim().isEmpty
-                              ? 'Please enter a name'
-                              : null,
-                        ),
-                        const SizedBox(height: 14),
-
-                        // Bio Field
-                        _buildInputField(
-                          controller: _bioCtrl,
-                          label: 'Focus Goals & Bio',
-                          hint:
-                              'e.g. Daily discipline, physical fitness, continuous learning',
-                          icon: Icons.psychology_outlined,
-                          iconColor: AppColors.accent,
-                          maxLines: 2,
-                          enabled: _isEditing,
-                        ),
-                        const SizedBox(height: 14),
-
-                        // Phone Field
-                        _buildInputField(
-                          controller: _phoneCtrl,
-                          label: 'Phone Number',
-                          hint: '+1 555-0199',
-                          icon: Icons.phone_outlined,
-                          iconColor: AppColors.timetable,
-                          keyboardType: TextInputType.phone,
-                          enabled: _isEditing,
-                        ),
-
-                        if (_isEditing) ...[
-                          const SizedBox(height: 18),
-                          SizedBox(
-                            width: double.infinity,
-                            height: 48,
-                            child: ElevatedButton.icon(
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: AppColors.primary,
-                                foregroundColor: Colors.white,
-                                shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(14)),
-                              ),
-                              icon: const Icon(Icons.check_rounded, size: 20),
-                              label: const Text('Save Profile Changes',
-                                  style:
-                                      TextStyle(fontWeight: FontWeight.w800)),
-                              onPressed: _saveProfile,
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ).animate().fadeIn(delay: 100.ms),
-                  const SizedBox(height: 16),
-
-                  // 3. Preferences Section
-                  _buildSectionCard(
-                    theme: theme,
-                    title: 'App Preferences',
-                    icon: Icons.tune_rounded,
-                    iconColor: AppColors.secondary,
-                    child: Column(
-                      children: [
-                        // Appearance Theme Switch
-                        SwitchListTile(
-                          contentPadding: EdgeInsets.zero,
-                          title: Text(
-                            isDark ? 'Theme: Dark Mode' : 'Theme: Light Mode',
-                            style: const TextStyle(
-                                fontWeight: FontWeight.w700, fontSize: 15),
-                          ),
-                          subtitle: Text(
-                            isDark
-                                ? 'Switch to clean Light theme'
-                                : 'Switch to eye-friendly Dark theme',
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: theme.colorScheme.onSurface
-                                  .withValues(alpha: 0.6),
-                            ),
-                          ),
-                          secondary: Container(
-                            padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: isDark
-                                  ? AppColors.secondary.withValues(alpha: 0.15)
-                                  : AppColors.accent.withValues(alpha: 0.15),
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: Icon(
-                              isDark
-                                  ? Icons.dark_mode_rounded
-                                  : Icons.light_mode_rounded,
-                              color: isDark
-                                  ? AppColors.secondary
-                                  : AppColors.accent,
-                              size: 20,
-                            ),
-                          ),
-                          value: isDark,
-                          activeTrackColor:
-                              AppColors.primary.withValues(alpha: 0.5),
-                          onChanged: (_) => themeProvider.toggleTheme(context),
-                        ),
-                      ],
-                    ),
-                  ).animate().fadeIn(delay: 300.ms),
-                  const SizedBox(height: 24),
-
-                  // 4. Data Backup Card
-                  _buildSectionCard(
-                    theme: theme,
-                    title: 'Data Backup',
-                    icon: Icons.backup_rounded,
-                    iconColor: AppColors.timetable,
-                    child: Column(
-                      children: [
-                        // Export
-                        SizedBox(
-                          width: double.infinity,
-                          child: ElevatedButton.icon(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: AppColors.timetable,
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(vertical: 13),
-                              shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(14)),
-                            ),
-                            icon: const Icon(Icons.upload_rounded, size: 20),
-                            label: const Text('Export My Data',
-                                style: TextStyle(fontWeight: FontWeight.w800)),
-                            onPressed: () async {
-                              final uid = auth.uid ?? 'local_user';
-                              final path = await DataExportService.instance
-                                  .exportToDownloads(uid);
-                              if (!context.mounted) return;
-                              if (path != null) {
-                                ScaffoldMessenger.of(context).clearSnackBars();
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text('✅ Backup saved!\n$path'),
-                                    backgroundColor: AppColors.success,
-                                    duration: const Duration(seconds: 3),
-                                    behavior: SnackBarBehavior.floating,
-                                  ),
-                                );
-                              } else {
-                                ScaffoldMessenger.of(context).clearSnackBars();
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text(
-                                        '❌ Export failed. Please try again.'),
-                                    backgroundColor: AppColors.error,
-                                    duration: Duration(seconds: 2),
-                                    behavior: SnackBarBehavior.floating,
-                                  ),
-                                );
-                              }
-                            },
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        // Import
-                        SizedBox(
-                          width: double.infinity,
-                          child: OutlinedButton.icon(
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: AppColors.timetable,
-                              side: const BorderSide(
-                                  color: AppColors.timetable, width: 1.5),
-                              padding: const EdgeInsets.symmetric(vertical: 13),
-                              shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(14)),
-                            ),
-                            icon: const Icon(Icons.download_rounded, size: 20),
-                            label: const Text('Import & Restore Data',
-                                style: TextStyle(fontWeight: FontWeight.w800)),
-                            onPressed: () async {
-                              final confirm = await showDialog<bool>(
-                                context: context,
-                                builder: (_) => AlertDialog(
-                                  shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(20)),
-                                  title: const Text('Restore from Backup?'),
-                                  content: const Text(
-                                    'This will merge the backup data with your current data. Existing records with the same ID will be overwritten.\n\nPick your grow_backup_*.json file to continue.',
-                                  ),
-                                  actions: [
-                                    TextButton(
-                                      onPressed: () =>
-                                          Navigator.pop(context, false),
-                                      child: const Text('Cancel'),
-                                    ),
-                                    TextButton(
-                                      onPressed: () =>
-                                          Navigator.pop(context, true),
-                                      child: const Text(
-                                        'Pick File & Restore',
-                                        style: TextStyle(
-                                            color: AppColors.timetable,
-                                            fontWeight: FontWeight.w800),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              );
-                              if (confirm != true || !context.mounted) return;
-                              final success = await DataExportService.instance
-                                  .importFromFile(
-                                uid: auth.uid ?? 'local_user',
-                              );
-                              if (!context.mounted) return;
-                              if (success) {
-                                // Reload all providers
-                                final uid = auth.uid ?? 'local_user';
-                                context.read<TodoProvider>().loadTodos(uid);
-                                context.read<HabitProvider>().loadHabits(uid);
-                                context
-                                    .read<JournalProvider>()
-                                    .loadJournals(uid);
-                                context
-                                    .read<FinanceProvider>()
-                                    .loadTransactions(uid);
-                                context
-                                    .read<ReminderProvider>()
-                                    .loadReminders(uid);
-                                context.read<AlarmProvider>().loadAlarms(uid);
-                                ScaffoldMessenger.of(context).clearSnackBars();
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content:
-                                        Text('✅ Data restored successfully!'),
-                                    backgroundColor: AppColors.success,
-                                    duration: Duration(seconds: 2),
-                                    behavior: SnackBarBehavior.floating,
-                                  ),
-                                );
-                              } else {
-                                ScaffoldMessenger.of(context).clearSnackBars();
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content:
-                                        Text('❌ Import failed or cancelled.'),
-                                    backgroundColor: AppColors.error,
-                                    duration: Duration(seconds: 2),
-                                    behavior: SnackBarBehavior.floating,
-                                  ),
-                                );
-                              }
-                            },
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'Export saves a .json file to your Downloads folder. You can import it any time to restore all data.',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.onSurface
-                                .withValues(alpha: 0.55),
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                      ],
-                    ),
-                  ).animate().fadeIn(delay: 350.ms),
-                  const SizedBox(height: 16),
-
-                  // 5. Reset All Local Data
-                  Center(
-                    child: TextButton.icon(
-                      style: TextButton.styleFrom(
-                        foregroundColor: AppColors.error,
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 16, vertical: 8),
-                      ),
-                      icon: const Icon(Icons.delete_forever_rounded, size: 18),
-                      label: const Text(
-                        'Reset All Local Data',
-                        style: TextStyle(
-                            fontWeight: FontWeight.w600, fontSize: 13),
-                      ),
-                      onPressed: () async {
-                        final ok = await showDialog<bool>(
-                          context: context,
-                          builder: (_) => AlertDialog(
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(20)),
-                            title: const Text('Reset All Local Data?'),
-                            content: const Text(
-                              '⚠️ This will permanently clear all your local tasks, habits, focus logs, journals, finances, alarms, and routines from this device.',
-                            ),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.pop(context, false),
-                                child: const Text('Cancel'),
-                              ),
-                              TextButton(
-                                onPressed: () => Navigator.pop(context, true),
-                                child: const Text(
-                                  'Clear Everything',
-                                  style: TextStyle(
-                                      color: AppColors.error,
-                                      fontWeight: FontWeight.w800),
-                                ),
-                              ),
-                            ],
-                          ),
-                        );
-                        if (ok == true && context.mounted) {
-                          await auth.resetAllLocalData();
-                          if (context.mounted) {
-                            final uid = auth.uid ?? 'local_user';
-                            context.read<ProfileProvider>().clear();
-                            context.read<TodoProvider>().clear();
-                            context.read<HabitProvider>().clear();
-                            context.read<JournalProvider>().clear();
-                            context.read<FinanceProvider>().clear();
-                            context.read<CalendarProvider>().clear();
-                            context.read<TimetableProvider>().clear();
-                            context.read<ChatbotProvider>().clear();
-                            context.read<ReminderProvider>().clear();
-                            context.read<AlarmProvider>().clear();
-                            context.read<StepProvider>().clear();
-
-                            context.read<ProfileProvider>().loadProfile(uid);
-                            context.read<TodoProvider>().loadTodos(uid);
-                            context.read<HabitProvider>().loadHabits(uid);
-                            context.read<JournalProvider>().loadJournals(uid);
-                            context
-                                .read<FinanceProvider>()
-                                .loadTransactions(uid);
-                            context.read<CalendarProvider>().loadEvents(uid);
-                            context.read<TimetableProvider>().loadSlots(uid);
-                            context.read<ChatbotProvider>().loadMessages(uid);
-                            context.read<ReminderProvider>().loadReminders(uid);
-                            context.read<AlarmProvider>().loadAlarms(uid);
-                            context.read<StepProvider>().loadStepData(uid);
-
-                            ScaffoldMessenger.of(context).clearSnackBars();
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content:
-                                    Text('🗑️ All local data has been reset.'),
-                                backgroundColor: AppColors.primary,
-                                duration: Duration(seconds: 2),
-                                behavior: SnackBarBehavior.floating,
-                              ),
-                            );
-                          }
-                        }
-                      },
-                    ),
-                  ).animate().fadeIn(delay: 450.ms),
-                  const SizedBox(height: 20),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  // ==================== WIDGET BUILDERS ====================
-
-  Widget _buildHeroHeader(UserProfile? profile, ThemeData theme, bool isDark) {
-    final photoPath = profile?.photoPath;
-    final hasValidFile = photoPath != null &&
-        photoPath.isNotEmpty &&
-        File(photoPath).existsSync();
-    final initial =
-        (profile?.name.isNotEmpty == true ? profile!.name.substring(0, 1) : 'G')
-            .toUpperCase();
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: isDark
-              ? [
-                  AppColors.primary.withValues(alpha: 0.2),
-                  theme.colorScheme.surface,
-                ]
-              : [
-                  AppColors.primary.withValues(alpha: 0.12),
-                  AppColors.primary.withValues(alpha: 0.03),
-                ],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(
-          color: AppColors.primary.withValues(alpha: isDark ? 0.2 : 0.15),
-        ),
-      ),
-      child: Row(
+      body: PageListView(
+        clearFab: false,
         children: [
-          Stack(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(3),
-                decoration: const BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: AppColors.primaryGradient,
-                ),
-                child: CircleAvatar(
-                  key: ValueKey(photoPath),
-                  radius: 38,
-                  backgroundColor: theme.colorScheme.surface,
-                  backgroundImage:
-                      hasValidFile ? FileImage(File(photoPath)) : null,
-                  child: !hasValidFile
-                      ? Text(
-                          initial,
-                          style: theme.textTheme.headlineMedium?.copyWith(
-                            color: AppColors.primary,
-                            fontWeight: FontWeight.w900,
-                          ),
-                        )
-                      : null,
-                ),
-              ),
-              Positioned(
-                bottom: 0,
-                right: 0,
-                child: GestureDetector(
-                  onTap: _pickImage,
-                  child: Container(
-                    padding: const EdgeInsets.all(7),
-                    decoration: BoxDecoration(
-                      color: AppColors.primary,
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                          color: theme.colorScheme.surface, width: 2),
-                    ),
-                    child: const Icon(
-                      Icons.camera_alt_rounded,
-                      size: 14,
-                      color: Colors.white,
-                    ),
-                  ),
-                ),
-              ),
-            ],
+          _ProfileHeader(profile: profile, onChangePhoto: _pickImage),
+          const SectionGap(),
+
+          // ── Personal information ─────────────────────────────────────────
+          const SectionHeader(title: 'Personal information'),
+          AnimatedSwitcher(
+            duration: AppMotion.medium,
+            child: _isEditing ? _buildEditForm() : _buildInfo(profile),
           ),
-          const SizedBox(width: 18),
-          Expanded(
+          const SectionGap(),
+
+          // ── Preferences ──────────────────────────────────────────────────
+          const SectionHeader(title: 'Preferences'),
+          AppCard(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  profile?.name.isNotEmpty == true
-                      ? profile!.name
-                      : 'Grow Member',
-                  style: theme.textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: -0.3,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                Text('Appearance', style: context.text.titleSmall),
+                const SizedBox(height: 2),
+                Text('Choose how Grow looks on this device.', style: context.text.bodySmall),
+                const SizedBox(height: AppSpacing.sm),
+                AppSegmented<bool>(
+                  segments: const {false: 'Light', true: 'Dark'},
+                  icons: const {false: Icons.light_mode_outlined, true: Icons.dark_mode_outlined},
+                  selected: isDark,
+                  onChanged: (dark) => themeProvider.setThemeMode(dark ? ThemeMode.dark : ThemeMode.light),
                 ),
-                const SizedBox(height: 3),
-                Text(
-                  '100% Offline & Private',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurface.withValues(alpha: 0.65),
-                    fontWeight: FontWeight.w500,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+              ],
+            ),
+          ),
+          const SectionGap(),
+
+          // ── Data & account ───────────────────────────────────────────────
+          const SectionHeader(
+            title: 'Data & account',
+            subtitle: 'Everything is stored privately on this device.',
+          ),
+          AppCard(
+            padding: EdgeInsets.zero,
+            child: Column(
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.upload_file_outlined),
+                  title: const Text('Export backup'),
+                  subtitle: const Text('Save a .json file to Downloads'),
+                  trailing: Icon(Icons.chevron_right_rounded, color: context.colors.textSecondary),
+                  onTap: () => _export(auth),
                 ),
-                const SizedBox(height: 8),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: AppColors.primary.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: const Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.shield_rounded,
-                          size: 14, color: AppColors.primary),
-                      SizedBox(width: 5),
-                      Text(
-                        'Local Storage Active',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.primary,
-                        ),
-                      ),
-                    ],
-                  ),
+                const Divider(indent: 56),
+                ListTile(
+                  leading: const Icon(Icons.settings_backup_restore_rounded),
+                  title: const Text('Restore from backup'),
+                  subtitle: const Text('Import a previously exported file'),
+                  trailing: Icon(Icons.chevron_right_rounded, color: context.colors.textSecondary),
+                  onTap: () => _import(auth),
+                ),
+                const Divider(indent: 56),
+                ListTile(
+                  iconColor: context.colors.error,
+                  textColor: context.colors.error,
+                  leading: const Icon(Icons.delete_forever_outlined),
+                  title: const Text('Reset all local data'),
+                  subtitle: const Text('Permanently delete everything on this device'),
+                  onTap: () => _reset(auth),
                 ),
               ],
             ),
@@ -757,95 +313,147 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Widget _buildSectionCard({
-    required ThemeData theme,
-    required String title,
-    required IconData icon,
-    required Color iconColor,
-    required Widget child,
-  }) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: theme.cardTheme.color ?? theme.colorScheme.surface,
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: theme.dividerColor.withValues(alpha: 0.2)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.02),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
+  Widget _buildInfo(UserProfile? profile) {
+    final phone = profile?.phoneNumber ?? '';
+    final bio = profile?.bio ?? '';
+    return AppCard(
+      key: const ValueKey('info'),
+      padding: EdgeInsets.zero,
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(7),
-                decoration: BoxDecoration(
-                  color: iconColor.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Icon(icon, color: iconColor, size: 16),
-              ),
-              const SizedBox(width: 10),
-              Text(
-                title,
-                style: theme.textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w800,
-                  fontSize: 16,
-                ),
-              ),
-            ],
+          _InfoRow(icon: Icons.badge_outlined, label: 'Name', value: profile?.name.isNotEmpty == true ? profile!.name : 'Not set'),
+          const Divider(indent: 56),
+          _InfoRow(icon: Icons.notes_rounded, label: 'Bio', value: bio.isNotEmpty ? bio : 'Not set'),
+          const Divider(indent: 56),
+          _InfoRow(
+            icon: Icons.phone_outlined,
+            label: 'Phone',
+            value: phone.isNotEmpty ? _maskedPhone(phone) : 'Not set',
           ),
-          const SizedBox(height: 18),
-          child,
         ],
       ),
     );
   }
 
-  Widget _buildInputField({
-    TextEditingController? controller,
-    String? initialValue,
-    required String label,
-    required String hint,
-    required IconData icon,
-    required Color iconColor,
-    bool enabled = true,
-    bool readOnly = false,
-    int maxLines = 1,
-    TextInputType? keyboardType,
-    String? Function(String?)? validator,
-  }) {
-    return TextFormField(
-      controller: controller,
-      initialValue: initialValue,
-      enabled: enabled,
-      readOnly: readOnly,
-      maxLines: maxLines,
-      keyboardType: keyboardType,
-      validator: validator,
-      style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
-      decoration: InputDecoration(
-        labelText: label,
-        hintText: hint,
-        prefixIcon: Container(
-          padding: const EdgeInsets.all(10),
-          child: Icon(icon, color: enabled ? iconColor : Colors.grey, size: 20),
-        ),
-        filled: true,
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: BorderSide.none,
+  Widget _buildEditForm() {
+    return AppCard(
+      key: const ValueKey('edit'),
+      child: Form(
+        key: _formKey,
+        child: Column(
+          children: [
+            TextFormField(
+              controller: _nameCtrl,
+              textCapitalization: TextCapitalization.words,
+              textInputAction: TextInputAction.next,
+              decoration: const InputDecoration(labelText: 'Name'),
+              validator: (v) => v == null || v.trim().isEmpty ? 'Please enter your name' : null,
+            ),
+            const SizedBox(height: AppSpacing.md),
+            TextFormField(
+              controller: _bioCtrl,
+              minLines: 1,
+              maxLines: 3,
+              textCapitalization: TextCapitalization.sentences,
+              decoration: const InputDecoration(
+                labelText: 'Bio',
+                hintText: 'e.g. Daily discipline, fitness, learning',
+              ),
+            ),
+            const SizedBox(height: AppSpacing.md),
+            TextFormField(
+              controller: _phoneCtrl,
+              keyboardType: TextInputType.phone,
+              autofillHints: const [AutofillHints.telephoneNumber],
+              decoration: const InputDecoration(labelText: 'Phone (optional)'),
+            ),
+            const SizedBox(height: AppSpacing.lg),
+            Row(
+              children: [
+                Expanded(child: OutlinedButton(onPressed: _cancelEdit, child: const Text('Cancel'))),
+                const SizedBox(width: AppSpacing.sm),
+                Expanded(child: FilledButton(onPressed: _saveProfile, child: const Text('Save'))),
+              ],
+            ),
+          ],
         ),
       ),
+    );
+  }
+}
+
+class _ProfileHeader extends StatelessWidget {
+  final UserProfile? profile;
+  final VoidCallback onChangePhoto;
+
+  const _ProfileHeader({required this.profile, required this.onChangePhoto});
+
+  @override
+  Widget build(BuildContext context) {
+    final photoPath = profile?.photoPath;
+    final hasValidFile = photoPath != null && photoPath.isNotEmpty && File(photoPath).existsSync();
+    final name = profile?.name.isNotEmpty == true ? profile!.name : 'Grow member';
+    final initial = name.substring(0, 1).toUpperCase();
+    final bio = profile?.bio ?? '';
+
+    return Padding(
+      padding: const EdgeInsets.only(top: AppSpacing.md),
+      child: Column(
+        children: [
+          Stack(
+            clipBehavior: Clip.none,
+            children: [
+              CircleAvatar(
+                key: ValueKey(photoPath),
+                radius: 44,
+                backgroundColor: context.scheme.primaryContainer,
+                backgroundImage: hasValidFile ? FileImage(File(photoPath)) : null,
+                child: !hasValidFile
+                    ? Text(initial, style: context.text.headlineMedium?.copyWith(color: context.scheme.onPrimaryContainer))
+                    : null,
+              ),
+              Positioned(
+                right: -8,
+                bottom: -8,
+                child: Material(
+                  color: context.scheme.surface,
+                  shape: CircleBorder(side: BorderSide(color: context.colors.border)),
+                  child: IconButton(
+                    tooltip: 'Change photo',
+                    onPressed: onChangePhoto,
+                    icon: Icon(Icons.photo_camera_outlined, size: AppSizes.iconMd, color: context.colors.textPrimary),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.md),
+          Text(name, style: context.text.headlineSmall, textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis),
+          if (bio.isNotEmpty) ...[
+            const SizedBox(height: AppSpacing.xxs),
+            Text(bio, style: context.text.bodySmall, textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis),
+          ],
+          const SizedBox(height: AppSpacing.sm),
+          const StatusBadge(label: 'Stored on this device', icon: Icons.lock_outline_rounded, tone: StatusTone.primary),
+        ],
+      ),
+    );
+  }
+}
+
+class _InfoRow extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+
+  const _InfoRow({required this.icon, required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      leading: Icon(icon),
+      title: Text(label, style: context.text.labelSmall),
+      subtitle: Text(value, style: context.text.bodyLarge),
     );
   }
 }

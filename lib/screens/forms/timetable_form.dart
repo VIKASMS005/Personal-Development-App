@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../models/timetable_slot.dart';
-import '../../utils/app_colors.dart';
 import '../../utils/app_time_picker.dart';
+import '../../widgets/ds/ds.dart';
 
 class TimetableFormDialog extends StatefulWidget {
   final TimetableSlot? initial;
@@ -18,8 +18,10 @@ class TimetableFormDialog extends StatefulWidget {
     TimetableSlot? initial,
     String defaultDay = 'Daily',
   }) {
-    return showDialog<TimetableSlot>(
+    return showModalBottomSheet<TimetableSlot>(
       context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
       builder: (_) => TimetableFormDialog(initial: initial, defaultDay: defaultDay),
     );
   }
@@ -51,13 +53,13 @@ class _TimetableFormDialogState extends State<TimetableFormDialog> {
   ];
 
   static const _categories = [
-    ('Study', Icons.menu_book_rounded, AppColors.tasks),
-    ('Work', Icons.work_rounded, AppColors.secondary),
-    ('Health', Icons.spa_rounded, AppColors.habits),
-    ('Workout', Icons.fitness_center_rounded, AppColors.error),
-    ('Leisure', Icons.sports_esports_rounded, AppColors.accent),
-    ('Sleep', Icons.bedtime_rounded, AppColors.journal),
-    ('Personal', Icons.person_rounded, AppColors.timetable),
+    ('Study', Icons.menu_book_rounded),
+    ('Work', Icons.work_outline_rounded),
+    ('Health', Icons.spa_outlined),
+    ('Workout', Icons.fitness_center_rounded),
+    ('Leisure', Icons.sports_esports_outlined),
+    ('Sleep', Icons.bedtime_outlined),
+    ('Personal', Icons.person_outline_rounded),
   ];
 
   @override
@@ -84,7 +86,7 @@ class _TimetableFormDialogState extends State<TimetableFormDialog> {
     final picked = await AppTimePicker.show(
       context,
       initialTime: TimeOfDay.now(),
-      helpText: isStart ? 'Select Start Time (AM / PM)' : 'Select End Time (AM / PM)',
+      helpText: isStart ? 'Start time' : 'End time',
     );
     if (picked != null && mounted) {
       final formatted = AppTimePicker.format(context, picked);
@@ -117,152 +119,91 @@ class _TimetableFormDialogState extends State<TimetableFormDialog> {
     }
   }
 
+  void _save() {
+    if (_formKey.currentState!.validate()) {
+      final slot = TimetableSlot(
+        id: widget.initial?.id,
+        dayOfWeek: _dayOfWeek,
+        startTime: _startTime,
+        endTime: _endTime,
+        title: _titleCtrl.text.trim(),
+        description: _descCtrl.text.trim(),
+        category: _category,
+        colorHex: _getCategoryColor(_category),
+        hasReminder: _hasReminder,
+      );
+      Navigator.pop(context, slot);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final isEdit = widget.initial != null;
-    final theme = Theme.of(context);
+    final categories = _categories.any((c) => c.$1 == _category) ? _categories : [..._categories, (_category, Icons.event_note_outlined)];
+    final days = _days.contains(_dayOfWeek) ? _days : [..._days, _dayOfWeek];
 
-    return Dialog(
-      insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
-        child: Form(
-          key: _formKey,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    isEdit ? 'Edit Routine Slot' : 'Add Routine Slot',
-                    style: theme.textTheme.titleLarge,
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.close_rounded),
-                    onPressed: () => Navigator.pop(context),
-                  ),
-                ],
+    return SheetScaffold(
+      title: isEdit ? 'Edit time block' : 'New time block',
+      footer: FilledButton(
+        onPressed: _save,
+        style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(AppSizes.buttonHeight)),
+        child: Text(isEdit ? 'Save changes' : 'Add to timetable'),
+      ),
+      child: Form(
+        key: _formKey,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextFormField(
+              controller: _titleCtrl,
+              textCapitalization: TextCapitalization.sentences,
+              textInputAction: TextInputAction.next,
+              decoration: const InputDecoration(
+                labelText: 'Title',
+                hintText: 'e.g. Deep study',
               ),
-              const SizedBox(height: 16),
-              // Day of Week selector
-              DropdownButtonFormField<String>(
-                initialValue: _dayOfWeek,
-                decoration: const InputDecoration(
-                  labelText: 'Day / Frequency',
-                  prefixIcon: Icon(Icons.calendar_today_rounded),
-                ),
-                items: _days
-                    .map((d) => DropdownMenuItem(value: d, child: Text(d)))
-                    .toList(),
-                onChanged: (v) => setState(() => _dayOfWeek = v!),
-              ),
-              const SizedBox(height: 14),
-              // Title
-              TextFormField(
-                controller: _titleCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Routine Title',
-                  hintText: 'e.g. Deep Study, Workout, Team Meeting',
-                  prefixIcon: Icon(Icons.title_rounded),
-                ),
-                validator: (v) => v == null || v.trim().isEmpty ? 'Please enter a title' : null,
-              ),
-              const SizedBox(height: 14),
-              // Description
-              TextFormField(
-                controller: _descCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Description (Optional)',
-                  prefixIcon: Icon(Icons.notes_rounded),
-                ),
-              ),
-              const SizedBox(height: 14),
-              // Time Range Pickers
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      icon: const Icon(Icons.access_time_rounded, size: 18),
-                      label: Text(_startTime),
-                      onPressed: () => _pickTime(true),
-                    ),
-                  ),
-                  const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 8),
-                    child: Text('to'),
-                  ),
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      icon: const Icon(Icons.access_time_filled_rounded, size: 18),
-                      label: Text(_endTime),
-                      onPressed: () => _pickTime(false),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              // Category Selector
-              Text('Category', style: theme.textTheme.titleSmall),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: _categories.map((cat) {
-                  final isSelected = _category == cat.$1;
-                  return ChoiceChip(
-                    avatar: Icon(cat.$2, size: 16, color: isSelected ? Colors.white : cat.$3),
-                    label: Text(cat.$1),
-                    selected: isSelected,
-                    selectedColor: cat.$3,
-                    labelStyle: TextStyle(
-                      color: isSelected ? Colors.white : null,
-                      fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-                    ),
-                    onSelected: (val) {
-                      if (val) setState(() => _category = cat.$1);
-                    },
-                  );
-                }).toList(),
-              ),
-              const SizedBox(height: 14),
-              // Reminder Switch
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Slot Reminder'),
-                subtitle: const Text('Notify when this routine starts'),
-                value: _hasReminder,
-                activeThumbColor: AppColors.primary,
-                onChanged: (v) => setState(() => _hasReminder = v),
-              ),
-              const SizedBox(height: 20),
-              // Actions
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  icon: const Icon(Icons.check_rounded),
-                  label: Text(isEdit ? 'Save Changes' : 'Add to Timetable'),
-                  onPressed: () {
-                    if (_formKey.currentState!.validate()) {
-                      final slot = TimetableSlot(
-                        id: widget.initial?.id,
-                        dayOfWeek: _dayOfWeek,
-                        startTime: _startTime,
-                        endTime: _endTime,
-                        title: _titleCtrl.text.trim(),
-                        description: _descCtrl.text.trim(),
-                        category: _category,
-                        colorHex: _getCategoryColor(_category),
-                        hasReminder: _hasReminder,
-                      );
-                      Navigator.pop(context, slot);
-                    }
-                  },
-                ),
-              ),
-            ],
-          ),
+              validator: (v) => v == null || v.trim().isEmpty ? 'Please enter a title' : null,
+            ),
+            const SizedBox(height: AppSpacing.md),
+            TextFormField(
+              controller: _descCtrl,
+              textCapitalization: TextCapitalization.sentences,
+              decoration: const InputDecoration(labelText: 'Notes (optional)'),
+            ),
+            const SizedBox(height: AppSpacing.md),
+            Row(
+              children: [
+                Expanded(child: PickerField(label: 'Starts', value: _startTime, icon: Icons.schedule_rounded, onTap: () => _pickTime(true))),
+                const SizedBox(width: AppSpacing.sm),
+                Expanded(child: PickerField(label: 'Ends', value: _endTime, icon: Icons.schedule_rounded, onTap: () => _pickTime(false))),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.lg),
+            const FieldLabel('Repeats'),
+            ChoiceWrap<String>(
+              options: days,
+              selected: _dayOfWeek,
+              labelOf: (d) => d == 'Daily' ? 'Every day' : d.substring(0, 3),
+              onSelected: (d) => setState(() => _dayOfWeek = d),
+            ),
+            const SizedBox(height: AppSpacing.lg),
+            const FieldLabel('Category'),
+            ChoiceWrap<(String, IconData)>(
+              options: categories,
+              selected: categories.firstWhere((c) => c.$1 == _category),
+              labelOf: (c) => c.$1,
+              iconOf: (c) => c.$2,
+              onSelected: (c) => setState(() => _category = c.$1),
+            ),
+            const SizedBox(height: AppSpacing.md),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Remind me'),
+              subtitle: const Text('Get a notification when this block starts'),
+              value: _hasReminder,
+              onChanged: (v) => setState(() => _hasReminder = v),
+            ),
+          ],
         ),
       ),
     );

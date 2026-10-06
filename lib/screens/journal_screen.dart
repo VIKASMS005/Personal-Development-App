@@ -1,10 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
+import '../models/journal_entry.dart';
 import '../providers/app_providers.dart';
-import '../utils/app_colors.dart';
-import '../widgets/empty_state.dart';
-import '../widgets/animated_card.dart';
+import '../widgets/ds/ds.dart';
 import 'forms/journal_form.dart';
 
 class JournalScreen extends StatefulWidget {
@@ -16,29 +15,24 @@ class JournalScreen extends StatefulWidget {
 
 class _JournalScreenState extends State<JournalScreen> {
   String _searchQuery = '';
+  final _searchC = TextEditingController();
 
-  String _moodEmoji(String mood) {
-    switch (mood) {
-      case 'happy':
-        return '😊';
-      case 'calm':
-        return '😌';
-      case 'energetic':
-        return '⚡';
-      case 'neutral':
-        return '😐';
-      case 'stressed':
-        return '😰';
-      case 'sad':
-        return '😔';
-      default:
-        return '✨';
+  @override
+  void dispose() {
+    _searchC.dispose();
+    super.dispose();
+  }
+
+  Future<void> _add(AuthProvider auth, JournalProvider journalProvider) async {
+    final j = await JournalForm.show(context);
+    if (j != null) {
+      j.uid = auth.uid ?? 'local_user';
+      await journalProvider.addJournal(j);
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final auth = context.watch<AuthProvider>();
     final journalProvider = context.watch<JournalProvider>();
 
@@ -50,199 +44,150 @@ class _JournalScreenState extends State<JournalScreen> {
           j.tags.any((t) => t.toLowerCase().contains(q));
     }).toList();
 
+    // Group by day for readable scanning.
+    final groups = <String, List<JournalEntry>>{};
+    final now = DateTime.now();
+    for (final j in entries) {
+      final d = j.createdAt;
+      final label = DateUtils.isSameDay(d, now)
+          ? 'Today'
+          : DateUtils.isSameDay(d, now.subtract(const Duration(days: 1)))
+              ? 'Yesterday'
+              : DateFormat(d.year == now.year ? 'EEEE, MMM d' : 'MMM d, yyyy').format(d);
+      groups.putIfAbsent(label, () => []).add(j);
+    }
+
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Journal & Reflection'),
+      appBar: AppBar(title: const Text('Journal')),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => _add(auth, journalProvider),
+        icon: const Icon(Icons.edit_outlined),
+        label: const Text('New entry'),
       ),
-      floatingActionButton: FloatingActionButton(
-        backgroundColor: AppColors.journal,
-        foregroundColor: Colors.white,
-        onPressed: () async {
-          final j = await JournalForm.show(context);
-          if (j != null) {
-            j.uid = auth.uid ?? 'local_user';
-            await journalProvider.addJournal(j);
-          }
-        },
-        child: const Icon(Icons.edit_rounded),
-      ),
-      body: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 800),
-          child: Column(
-            children: [
-          // Search Bar
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-            child: TextField(
-              decoration: InputDecoration(
-                hintText: 'Search title, reflections, or tags...',
-                prefixIcon: const Icon(Icons.search_rounded, size: 20),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                suffixIcon: _searchQuery.isNotEmpty
-                    ? IconButton(
-                        icon: const Icon(Icons.clear_rounded, size: 18),
-                        onPressed: () => setState(() => _searchQuery = ''),
-                      )
-                    : null,
-              ),
-              onChanged: (val) => setState(() => _searchQuery = val),
+      body: PageListView(
+        children: [
+          TextField(
+            controller: _searchC,
+            decoration: InputDecoration(
+              hintText: 'Search entries or tags',
+              prefixIcon: const Icon(Icons.search_rounded, size: AppSizes.iconMd),
+              suffixIcon: _searchQuery.isNotEmpty
+                  ? IconButton(
+                      tooltip: 'Clear search',
+                      icon: const Icon(Icons.close_rounded, size: AppSizes.iconMd),
+                      onPressed: () => setState(() {
+                        _searchC.clear();
+                        _searchQuery = '';
+                      }),
+                    )
+                  : null,
             ),
+            onChanged: (val) => setState(() => _searchQuery = val),
           ),
+          const SizedBox(height: AppSpacing.md),
+          if (entries.isEmpty)
+            EmptyState(
+              icon: _searchQuery.isNotEmpty ? Icons.search_off_rounded : Icons.auto_stories_outlined,
+              title: _searchQuery.isNotEmpty ? 'No matching entries' : 'No entries yet',
+              subtitle: _searchQuery.isNotEmpty
+                  ? 'Try a different word or tag.'
+                  : 'Capture your thoughts, lessons and wins each day.',
+              action: _searchQuery.isEmpty
+                  ? FilledButton(onPressed: () => _add(auth, journalProvider), child: const Text('Write an entry'))
+                  : null,
+            )
+          else
+            for (final g in groups.entries) ...[
+              SectionHeader(title: g.key),
+              for (final j in g.value) ...[
+                _JournalCard(
+                  entry: j,
+                  onTap: () async {
+                    final edited = await JournalForm.show(context, initial: j);
+                    if (edited != null) {
+                      await journalProvider.updateJournal(edited);
+                    }
+                  },
+                  onDelete: () async {
+                    final ok = await ConfirmDialog.show(
+                      context,
+                      title: 'Delete entry?',
+                      message: 'This journal entry will be removed permanently.',
+                      confirmLabel: 'Delete',
+                      destructive: true,
+                    );
+                    if (ok) {
+                      await journalProvider.deleteJournal(j.id);
+                    }
+                  },
+                ),
+                const SizedBox(height: AppSpacing.sm),
+              ],
+              const SizedBox(height: AppSpacing.sm),
+            ],
+        ],
+      ),
+    );
+  }
+}
 
-          // Entries List
-          Expanded(
-            child: entries.isEmpty
-                ? EmptyState(
-                    icon: Icons.auto_stories_rounded,
-                    title: _searchQuery.isNotEmpty
-                        ? 'No matching reflections'
-                        : 'No reflections yet',
-                    subtitle: _searchQuery.isNotEmpty
-                        ? 'Try a different search query'
-                        : 'Capture your thoughts, lessons, and wins each day',
-                    iconColor: AppColors.journal,
-                    action: _searchQuery.isEmpty
-                        ? ElevatedButton.icon(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: AppColors.journal,
-                              foregroundColor: Colors.white,
-                            ),
-                            icon: const Icon(Icons.edit_rounded, size: 18),
-                            label: const Text('Write Reflection'),
-                            onPressed: () async {
-                              final j = await JournalForm.show(context);
-                              if (j != null) {
-                                j.uid = auth.uid ?? 'local_user';
-                                await journalProvider.addJournal(j);
-                              }
-                            },
-                          )
-                        : null,
-                  )
-                : ListView.builder(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 80),
-                    itemCount: entries.length,
-                    itemBuilder: (context, index) {
-                      final j = entries[index];
-                      final dateStr = DateFormat('MMM dd, yyyy • hh:mm a').format(j.createdAt);
-                      final moodEmoji = _moodEmoji(j.mood);
+class _JournalCard extends StatelessWidget {
+  final JournalEntry entry;
+  final VoidCallback onTap;
+  final VoidCallback onDelete;
 
-                      return AnimatedListItem(
-                        index: index,
-                        child: Padding(
-                          padding: const EdgeInsets.only(bottom: 12),
-                          child: AppCard(
-                            accentColor: AppColors.journal,
-                            onTap: () async {
-                              final edited = await JournalForm.show(context, initial: j);
-                              if (edited != null) {
-                                await journalProvider.updateJournal(edited);
-                              }
-                            },
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  children: [
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                      decoration: BoxDecoration(
-                                        color: AppColors.journal.withValues(alpha: 0.12),
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Text(moodEmoji, style: const TextStyle(fontSize: 14)),
-                                          const SizedBox(width: 6),
-                                          Text(
-                                            dateStr,
-                                            style: const TextStyle(
-                                              fontSize: 11,
-                                              fontWeight: FontWeight.w600,
-                                              color: AppColors.journal,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                    const Spacer(),
-                                    IconButton(
-                                      icon: Icon(
-                                        Icons.delete_outline_rounded,
-                                        size: 18,
-                                        color: AppColors.error.withValues(alpha: 0.7),
-                                      ),
-                                      onPressed: () async {
-                                        final ok = await showDialog<bool>(
-                                          context: context,
-                                          builder: (_) => AlertDialog(
-                                            title: const Text('Delete Entry'),
-                                            content: const Text('Delete this journal entry?'),
-                                            actions: [
-                                              TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-                                              TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Delete', style: TextStyle(color: AppColors.error))),
-                                            ],
-                                          ),
-                                        );
-                                        if (ok == true) {
-                                          await journalProvider.deleteJournal(j.id);
-                                        }
-                                      },
-                                    ),
-                                  ],
-                                ),
-                                if (j.title.isNotEmpty) ...[
-                                  const SizedBox(height: 10),
-                                  Text(
-                                    j.title,
-                                    style: theme.textTheme.titleMedium?.copyWith(
-                                      fontWeight: FontWeight.w800,
-                                      fontSize: 16,
-                                      letterSpacing: -0.2,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 6),
-                                ] else ...[
-                                  const SizedBox(height: 10),
-                                ],
-                                Text(
-                                  j.text,
-                                  style: theme.textTheme.bodyMedium?.copyWith(
-                                    height: 1.55,
-                                    color: theme.colorScheme.onSurface.withValues(alpha: j.title.isNotEmpty ? 0.85 : 1.0),
-                                  ),
-                                ),
-                                if (j.tags.isNotEmpty) ...[
-                                  const SizedBox(height: 10),
-                                  Wrap(
-                                    spacing: 6,
-                                    children: j.tags.map((tag) {
-                                      return Chip(
-                                        label: Text(
-                                          '#$tag',
-                                          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
-                                        ),
-                                        visualDensity: VisualDensity.compact,
-                                        backgroundColor: AppColors.journal.withValues(alpha: 0.08),
-                                        side: BorderSide.none,
-                                      );
-                                    }).toList(),
-                                  ),
-                                ],
-                              ],
-                            ),
-                          ),
-                        ),
-                      );
-                    },
+  const _JournalCard({required this.entry, required this.onTap, required this.onDelete});
+
+  @override
+  Widget build(BuildContext context) {
+    final j = entry;
+    return AppCard(
+      onTap: onTap,
+      padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.sm, AppSpacing.xxs, AppSpacing.md),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              StatusBadge(label: moodLabel(j.mood), icon: moodIcon(j.mood), tone: StatusTone.primary),
+              const SizedBox(width: AppSpacing.xs),
+              Text(DateFormat('h:mm a').format(j.createdAt), style: context.text.labelSmall),
+              const Spacer(),
+              IconButton(
+                tooltip: 'Delete entry',
+                icon: Icon(Icons.delete_outline_rounded, size: AppSizes.iconMd, color: context.colors.textSecondary),
+                onPressed: onDelete,
+              ),
+            ],
+          ),
+          Padding(
+            padding: const EdgeInsets.only(right: AppSpacing.sm),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (j.title.isNotEmpty) ...[
+                  Text(j.title, style: context.text.titleSmall, maxLines: 2, overflow: TextOverflow.ellipsis),
+                  const SizedBox(height: AppSpacing.xxs),
+                ],
+                Text(
+                  j.text,
+                  maxLines: 4,
+                  overflow: TextOverflow.ellipsis,
+                  style: context.text.bodyMedium?.copyWith(height: 1.5, color: context.colors.textSecondary),
+                ),
+                if (j.tags.isNotEmpty) ...[
+                  const SizedBox(height: AppSpacing.sm),
+                  Wrap(
+                    spacing: AppSpacing.xs - 2,
+                    runSpacing: AppSpacing.xxs,
+                    children: j.tags.map((tag) => StatusBadge(label: '#$tag', outlined: true)).toList(),
                   ),
+                ],
+              ],
+            ),
           ),
         ],
       ),
-    ),
-  ),
-);
+    );
   }
 }
