@@ -10,12 +10,6 @@ import java.util.UUID
 
 object StepDbHelper {
 
-    private const val PREFS_NAME = "grow_step_prefs"
-    private const val KEY_RAW_STEPS = "grow_raw_steps"
-    private const val KEY_STEP_DATE = "grow_step_date"
-    private const val KEY_BASELINE_PREFIX = "grow_baseline_"
-    private const val KEY_CURRENT_UID = "grow_current_uid"
-
     /**
      * Format today's local date as canonical YYYY-MM-DD using Locale.US (ASCII digits).
      */
@@ -23,56 +17,30 @@ object StepDbHelper {
         return SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
     }
 
-    /**
-     * Checks if a calendar day rollover occurred. If so, snapshots yesterday's accumulated
-     * steps to SQLite, initializes today's baseline to rawSteps, and updates the recorded date.
-     *
-     * @return true if a date rollover was detected and processed.
-     */
+    /** Read the stored step_count for (uid, date), or 0 if there is none. */
     @Synchronized
-    fun handleDateRollover(context: Context, rawSteps: Long, todayDateStr: String): Boolean {
-        if (rawSteps <= 0L) return false
-
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val lastRecordedDate = prefs.getString(KEY_STEP_DATE, "") ?: ""
-        val uid = prefs.getString(KEY_CURRENT_UID, "local_user") ?: "local_user"
-
-        if (lastRecordedDate.isNotEmpty() && lastRecordedDate != todayDateStr) {
-            val lastBaseline = prefs.getLong(KEY_BASELINE_PREFIX + lastRecordedDate, -1L)
-            val effectiveBaseline = if (lastBaseline >= 0L) lastBaseline else 0L
-            if (rawSteps >= effectiveBaseline) {
-                val discardedYesterday = prefs.getLong("grow_discarded_steps_$lastRecordedDate", 0L)
-                val rawDeltaYesterday = rawSteps - effectiveBaseline
-                val stepsForYesterday = maxOf(0L, rawDeltaYesterday - discardedYesterday)
-                writeStepRecord(context, uid, lastRecordedDate, stepsForYesterday, forceOverwrite = true)
+    fun readStepCount(context: Context, uid: String, dateStr: String): Long {
+        return try {
+            val dbFile = context.getDatabasePath("grow_app_v2.db")
+            if (!dbFile.exists()) return 0L
+            val db = SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READONLY)
+            try {
+                db.rawQuery(
+                    "SELECT MAX(step_count) FROM step_records WHERE uid = ? AND date = ?",
+                    arrayOf(uid, dateStr)
+                ).use { c -> if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else 0L }
+            } finally {
+                db.close()
             }
-
-            val editor = prefs.edit()
-            // Set today's baseline to rawSteps at the moment of day transition
-            editor.putLong(KEY_BASELINE_PREFIX + todayDateStr, rawSteps)
-            editor.putString(KEY_STEP_DATE, todayDateStr)
-            editor.putLong(KEY_RAW_STEPS, rawSteps)
-            editor.commit()
-
-            // Initialize today's record in SQLite with 0 steps
-            writeStepRecord(context, uid, todayDateStr, 0L, forceOverwrite = true)
-            return true
-        } else if (lastRecordedDate.isEmpty()) {
-            val editor = prefs.edit()
-            val todayBaselineKey = KEY_BASELINE_PREFIX + todayDateStr
-            if (!prefs.contains(todayBaselineKey)) {
-                editor.putLong(todayBaselineKey, rawSteps)
-            }
-            editor.putString(KEY_STEP_DATE, todayDateStr)
-            editor.putLong(KEY_RAW_STEPS, rawSteps)
-            editor.commit()
-        }
-        return false
+        } catch (_: Exception) { 0L }
     }
 
     /**
      * Write or update a step record for a specific calendar date in SQLite.
      * Consolidates any duplicate rows so exactly ONE entry exists per (uid, date).
+     *
+     * [steps] is the authoritative total from StepRepository. Unless [forceOverwrite] is set,
+     * the stored value only ever goes up, so a late/queued write can never lower it.
      */
     @Synchronized
     fun writeStepRecord(context: Context, uid: String, dateStr: String, steps: Long, forceOverwrite: Boolean = false): Boolean {
@@ -95,7 +63,6 @@ object StepDbHelper {
                 val stepPrefs = context.getSharedPreferences("grow_step_prefs", 0)
                 val userGoal = stepPrefs.getInt("grow_daily_step_goal", 6000)
                 var goal = userGoal // Default to user's actual goal, not hardcoded 6000
-                val rebootOffset = stepPrefs.getLong("grow_pre_reboot_offset_$dateStr", 0L)
                 var existingSteps = 0L
                 val duplicateIds = mutableListOf<String>()
 
@@ -123,12 +90,7 @@ object StepDbHelper {
                     db.delete("step_records", "id = ?", arrayOf(dupId))
                 }
 
-                val postRebootTotal = steps + rebootOffset
-                val effectiveSteps = if (forceOverwrite) {
-                    postRebootTotal
-                } else {
-                    maxOf(existingSteps, postRebootTotal)
-                }
+                val effectiveSteps = if (forceOverwrite) steps else maxOf(existingSteps, steps)
 
                 val cv = ContentValues().apply {
                     put("uid", uid)

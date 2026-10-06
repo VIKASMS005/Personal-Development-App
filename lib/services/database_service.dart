@@ -957,6 +957,28 @@ class DatabaseService {
     }
   }
 
+  /// Update only the goal of a day's step record (inserting an empty row if missing).
+  ///
+  /// The step_count column is owned by the native StepRepository (single source of
+  /// truth). Writing a whole StepRecord from Dart could put an older in-memory count
+  /// back over a newer one, so goal changes must go through this method.
+  Future<void> updateStepGoal(String uid, String date, int goal) async {
+    final db = await database;
+    final updated = await db.update(
+      'step_records',
+      {'goal': goal},
+      where: 'uid = ? AND date = ?',
+      whereArgs: [uid, date],
+    );
+    if (updated == 0) {
+      await db.insert(
+        'step_records',
+        StepRecord(uid: uid, date: date, stepCount: 0, goal: goal).toMap(),
+        conflictAlgorithm: ConflictAlgorithm.ignore,
+      );
+    }
+  }
+
   Future<StepRecord?> getStepRecord(String uid, String date) async {
     final db = await database;
     final res = await db.query(

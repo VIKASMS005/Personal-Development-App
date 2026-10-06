@@ -1,243 +1,214 @@
 package com.example.flutter_application_1
 
-import android.os.SystemClock
-import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToLong
 import kotlin.math.sqrt
 
 /**
- * GaitValidator — Intelligent Pedometer Fraud & Shaking Detector (v6).
+ * GaitValidator (v7) — decides whether steps reported by the hardware pedometer during a
+ * short window really came from walking/running, using the accelerometer.
  *
- * Designed to be 100% ORIENTATION-INDEPENDENT & ACCURATE:
- * Works identically whether the phone is:
- *  - Held in hand
- *  - In a trouser/pants pocket (upright, upside-down, or tilted)
- *  - In a shirt/jacket pocket
- *  - In a backpack or handbag
- *  - Screen ON or OFF / Locked
- *  - Walking indoors or outdoors (no GPS required)
+ * Why it was rewritten (root causes in v6):
+ *  - Every step was recorded twice (step detector + step counter) in the step-rate check,
+ *    so ordinary walking (>= 1.75 steps/s) was flagged as "> 3.5 steps/s" and discarded.
+ *  - Running was flagged as "violent shaking" (peaks > 18 m/s², RMS > 5.5 m/s²).
+ *  - The 10 s sample buffer was never aged out, so stale samples (from before the screen
+ *    turned off) decided the verdict for later steps.
+ *  - Its verdict was applied retroactively to steps already shown, making the count drop.
  *
- * Mathematical Core:
- *  Uses 3D Euclidean dynamic acceleration:
- *    m(t) = sqrt(ax^2 + ay^2 + az^2)
- *    d(t) = m(t) - 9.80665 m/s²
- *  Operates on unrectified dynamic acceleration with 5-point moving average smoothing
- *  and Schmitt-trigger hysteresis (±0.40 m/s²) to eliminate sensor noise.
- *  Measures true bipedal cadence (1.0 - 3.2 Hz for walking/running).
- *
- * Fraud & False-Positive Rejection Rules:
- *  1. Sleep / Low Sample Count: If phone was asleep in pocket/bag (n < 40 samples),
- *     trust hardware pedometer events 100%.
- *  2. Fast Hand Shaking / Leg Tremor: Fast hand shaking occurs at 4.5 - 8.0 Hz.
- *     Human walking/running cadence never exceeds 3.5 Hz (210 steps/min).
- *     Flagged only if frequency >= 4.2 Hz with RMS > 2.0 m/s².
- *  3. Violent Shaking: Peak dynamic acceleration > 18.0 m/s² with sustained RMS > 5.5 m/s².
- *  4. Vehicle Engine Vibration: High frequency jitter > 10.0 Hz with low RMS (< 0.6 m/s²).
- *  5. Step Rate Limiter: Synchronized to SystemClock.elapsedRealtimeNanos() matching
- *     SensorEvent.timestamp. Rejects cadence > 3.6 steps/sec (> 7 steps in 2s).
+ * Approach (orientation independent — works in pocket, jacket, bag, hand):
+ *  - Use only samples whose timestamps fall inside the window being judged.
+ *  - Signal = |a| (magnitude), mean removed, resampled to a uniform 50 Hz grid and
+ *    lightly smoothed. Magnitude does not depend on how the phone is oriented.
+ *  - Walking and running are strongly *periodic* at the step rate (≈0.8–3.8 steps/s).
+ *    The normalized autocorrelation finds the dominant period.
+ *  - Reject when:
+ *      * the phone is essentially still (nobody carried it while stepping),
+ *      * the dominant rhythm is faster than any human cadence (hand shaking, leg jiggling,
+ *        vibration),
+ *      * the motion has no rhythm at all (random hand movements, picking up / putting down),
+ *      * the reported step rate is physically impossible.
+ *  - If there is not enough accelerometer data (phone asleep in a pocket/bag with the
+ *    screen off) the hardware pedometer — which has its own walking filter — is trusted.
  */
-class GaitValidator {
+class GaitValidator(private val capacity: Int = 1024) {
+
+    enum class Reason { ACCEPTED, INSUFFICIENT_DATA_TRUSTED, STILL, TOO_FAST_SHAKING, NO_RHYTHM, IMPOSSIBLE_RATE }
+
+    data class Verdict(
+        val accepted: Long,
+        val reason: Reason,
+        val cadenceHz: Float = 0f,
+        val periodicity: Float = 0f,
+        val rms: Float = 0f,
+    )
 
     companion object {
-        private const val BUFFER_SIZE = 500 // ~10s circular buffer at ~50Hz
-        private const val MIN_SAMPLES_FOR_ANALYSIS = 40 // ~0.8s minimum to evaluate active motion
-
-        // Earth gravity constant (m/s²)
-        private const val GRAVITY_EARTH = 9.80665f
-
-        // Stationary threshold: dynamic RMS below this means phone is at rest
-        private const val STATIONARY_RMS_THRESHOLD = 0.20f // m/s²
-
-        // Fast hand shaking cadence frequency threshold (4.2 Hz = 252 steps/min)
-        // Human sprinting cadence tops out around 3.3 - 3.5 Hz. Hand shaking is 4.5 - 8 Hz.
-        private const val FAST_SHAKE_MIN_FREQ_HZ = 4.20f
-
-        // Step arrival rate limit (steps per second)
-        private const val MAX_VALID_STEP_RATE_HZ = 3.6f
-
-        // Schmitt-trigger hysteresis thresholds for noise-free cycle detection (m/s²)
-        private const val HYSTERESIS_HIGH = 0.40f
-        private const val HYSTERESIS_LOW = -0.40f
+        const val RESAMPLE_HZ = 50.0
+        /** Minimum covered span (s) of accelerometer data needed to judge a window. */
+        const val MIN_SPAN_SEC = 2.0
+        /** A gap longer than this inside the window means the sensor was paused. */
+        const val MAX_GAP_SEC = 0.5
+        /** Below this RMS of dynamic acceleration the phone is not being carried by a walker. */
+        const val STILL_RMS = 0.18f
+        /** Human step cadence range (steps per second). */
+        const val MIN_CADENCE_HZ = 0.8
+        const val MAX_CADENCE_HZ = 3.8
+        /** Below this normalized autocorrelation there is no repeating gait pattern. */
+        const val MIN_PERIODICITY = 0.25f
+        /** Physically impossible sustained step rate (elite sprint is ~4.5–5/s). */
+        const val MAX_STEP_RATE_HZ = 5.0
+        /** Hardware counters often release a batch of steps they held while confirming a walk. */
+        const val BATCH_ALLOWANCE_STEPS = 12L
     }
 
-    // 3D Accelerometer circular buffer
-    private val axBuffer = FloatArray(BUFFER_SIZE)
-    private val ayBuffer = FloatArray(BUFFER_SIZE)
-    private val azBuffer = FloatArray(BUFFER_SIZE)
-    private val timeBuffer = LongArray(BUFFER_SIZE)
-    private var bufIdx = 0
-    private var sampleCount = 0L
-
-    // Step event timestamp tracking for cadence rate limit (using SystemClock.elapsedRealtimeNanos)
-    private val stepTimestamps = LongArray(32)
-    private var stepTimestampIdx = 0
-    private var totalStepsRecorded = 0
-
-    // Analysis results
-    private var _isShaking = false
-    private var _isWalking = true
-    private var _isStationary = false
-    private var _confidence = 1.0f
+    private val xs = FloatArray(capacity)
+    private val ys = FloatArray(capacity)
+    private val zs = FloatArray(capacity)
+    private val ts = LongArray(capacity)
+    private var head = 0 // next write position
+    private var size = 0
 
     @Synchronized
     fun addSample(x: Float, y: Float, z: Float, timestampNanos: Long) {
-        axBuffer[bufIdx] = x
-        ayBuffer[bufIdx] = y
-        azBuffer[bufIdx] = z
-        timeBuffer[bufIdx] = timestampNanos
-        bufIdx = (bufIdx + 1) % BUFFER_SIZE
-        sampleCount++
+        xs[head] = x; ys[head] = y; zs[head] = z; ts[head] = timestampNanos
+        head = (head + 1) % capacity
+        if (size < capacity) size++
     }
-
-    /**
-     * Record a hardware step event timestamp to monitor step arrival cadence.
-     * Uses SystemClock.elapsedRealtimeNanos() matching SensorEvent.timestamp timebase.
-     */
-    @Synchronized
-    fun recordStepArrival(timestampNanos: Long = SystemClock.elapsedRealtimeNanos()) {
-        stepTimestamps[stepTimestampIdx] = timestampNanos
-        stepTimestampIdx = (stepTimestampIdx + 1) % stepTimestamps.size
-        totalStepsRecorded++
-    }
-
-    /**
-     * Check if step arrival rate over the last 2 seconds exceeds human limits (> 3.6 steps/sec).
-     * Strictly uses SystemClock.elapsedRealtimeNanos() to prevent clock mismatch.
-     */
-    @Synchronized
-    fun isStepRateExcessive(nowNanos: Long = SystemClock.elapsedRealtimeNanos()): Boolean {
-        if (totalStepsRecorded < 6) return false
-        val twoSecondsAgo = nowNanos - 2_000_000_000L
-        var countInWindow = 0
-        val size = min(totalStepsRecorded, stepTimestamps.size)
-        for (i in 0 until size) {
-            val ts = stepTimestamps[i]
-            // Must be within [now - 2s, now + 0.5s] to account for any slight buffer scheduling
-            if (ts in twoSecondsAgo..(nowNanos + 500_000_000L)) {
-                countInWindow++
-            }
-        }
-        // > 7 steps in 2 seconds = > 3.5 steps/sec = physically impossible for walking
-        return countInWindow > (MAX_VALID_STEP_RATE_HZ * 2.0f).toInt()
-    }
-
-    @Synchronized
-    fun analyze() {
-        val n = min(sampleCount.toInt(), BUFFER_SIZE)
-        if (n < MIN_SAMPLES_FOR_ANALYSIS) {
-            // Not enough accelerometer samples (e.g. phone screen was off, device asleep in pocket)
-            // Innocent until proven guilty: accept hardware pedometer steps unconditionally
-            _isWalking = true
-            _isShaking = false
-            _isStationary = false
-            _confidence = 0.85f
-            return
-        }
-
-        // 1. Compute 3D Orientation-Invariant Unrectified Dynamic Acceleration:
-        //    d(t) = sqrt(ax^2 + ay^2 + az^2) - 9.80665 m/s²
-        val rawDyn = FloatArray(n)
-        var dynRmsSum = 0.0
-        var maxAbsDynMag = 0f
-
-        for (i in 0 until n) {
-            val idx = (bufIdx - n + i + BUFFER_SIZE) % BUFFER_SIZE
-            val ax = axBuffer[idx]
-            val ay = ayBuffer[idx]
-            val az = azBuffer[idx]
-            val mag = sqrt(ax * ax + ay * ay + az * az)
-            val d = mag - GRAVITY_EARTH
-
-            rawDyn[i] = d
-            dynRmsSum += d * d
-            val absD = abs(d)
-            if (absD > maxAbsDynMag) maxAbsDynMag = absD
-        }
-
-        val dynRms = sqrt(dynRmsSum / n).toFloat()
-
-        // 2. Stationary Check: If dynamic acceleration is negligible, phone is at rest
-        if (dynRms < STATIONARY_RMS_THRESHOLD) {
-            _isStationary = true
-            _isWalking = false
-            _isShaking = false
-            _confidence = 0.0f
-            return
-        }
-        _isStationary = false
-
-        // 3. Smooth with 5-point moving average to eliminate accelerometer high-frequency noise
-        val smoothed = FloatArray(n)
-        for (i in 0 until n) {
-            if (i in 2 until (n - 2)) {
-                smoothed[i] = (rawDyn[i - 2] + rawDyn[i - 1] + rawDyn[i] + rawDyn[i + 1] + rawDyn[i + 2]) / 5.0f
-            } else {
-                smoothed[i] = rawDyn[i]
-            }
-        }
-
-        // 4. Schmitt-trigger hysteresis state machine for robust, noise-free cadence frequency
-        //    Only switches state when signal crosses +0.40 m/s² or -0.40 m/s².
-        //    Normal walking measures 1.2 - 2.8 Hz. Fast hand shaking measures 4.5 - 8.0 Hz.
-        var halfCycles = 0
-        var state = 0 // +1 = high, -1 = low, 0 = neutral
-        for (i in 0 until n) {
-            val v = smoothed[i]
-            if (v > HYSTERESIS_HIGH && state != 1) {
-                if (state == -1) halfCycles++
-                state = 1
-            } else if (v < HYSTERESIS_LOW && state != -1) {
-                if (state == 1) halfCycles++
-                state = -1
-            }
-        }
-
-        val firstIdx = (bufIdx - n + BUFFER_SIZE) % BUFFER_SIZE
-        val lastIdx = (bufIdx - 1 + BUFFER_SIZE) % BUFFER_SIZE
-        val dtNanos = timeBuffer[lastIdx] - timeBuffer[firstIdx]
-        val dtSec = if (dtNanos > 100_000_000L) dtNanos / 1_000_000_000.0 else (n / 50.0)
-        // 2 half-cycles = 1 full cycle
-        val estimatedFreqHz = if (dtSec > 0.2) (halfCycles / 2.0 / dtSec).toFloat() else 0f
-
-        // ── SHAKING & FRAUD DETECTION CRITERIA (ORIENTATION-INDEPENDENT) ─────
-
-        // Criterion 1: FAST HAND SHAKING / INTENTIONAL RAPID OSCILLATION
-        // Walking/running cadence never exceeds 3.5 Hz. Hand shaking is 4.5 - 8.0 Hz.
-        val isFastShaking = estimatedFreqHz >= FAST_SHAKE_MIN_FREQ_HZ && dynRms > 2.0f
-
-        // Criterion 2: VIOLENT ABNORMAL SHAKING
-        // Deliberate violent shaking generates shocks > 18.0 m/s² with sustained RMS > 5.5 m/s².
-        val isViolentShaking = maxAbsDynMag > 18.0f && dynRms > 5.5f
-
-        // Criterion 3: VEHICLE ENGINE VIBRATION
-        // High frequency (> 10 Hz) with small chassis amplitude (RMS < 0.6 m/s²).
-        val isVehicleVibration = estimatedFreqHz > 10.0f && dynRms < 0.6f
-
-        // Criterion 4: STEP ARRIVAL CADENCE ABUSE
-        val isStepRateAbnormal = isStepRateExcessive()
-
-        // Overall Shaking Verdict: True ONLY if unequivocal shaking is proven
-        _isShaking = isFastShaking || isViolentShaking || isVehicleVibration || isStepRateAbnormal
-        _isWalking = !_isShaking
-        _confidence = if (_isShaking) 0.95f else 0.90f
-    }
-
-    @Synchronized fun isShakingMotion(): Boolean = _isShaking
-    @Synchronized fun isWalkingGait(): Boolean = _isWalking
-    @Synchronized fun isStationary(): Boolean = _isStationary
-    @Synchronized fun getGaitConfidence(): Float = _confidence
-    @Synchronized fun getSampleCount(): Int = min(sampleCount.toInt(), BUFFER_SIZE)
 
     @Synchronized
     fun reset() {
-        bufIdx = 0
-        sampleCount = 0L
-        stepTimestampIdx = 0
-        totalStepsRecorded = 0
-        _isShaking = false
-        _isWalking = true
-        _isStationary = false
-        _confidence = 1.0f
+        head = 0
+        size = 0
+    }
+
+    /**
+     * Judge [steps] pending steps reported between [startNanos] and [endNanos]
+     * (same timebase as the sample timestamps).
+     */
+    @Synchronized
+    fun evaluate(steps: Long, startNanos: Long, endNanos: Long): Verdict {
+        if (steps <= 0L) return Verdict(0L, Reason.ACCEPTED)
+
+        // 1. Collect samples inside the window, oldest first.
+        val tList = ArrayList<Long>(size)
+        val mList = ArrayList<Float>(size)
+        for (i in 0 until size) {
+            val idx = (head - size + i + capacity) % capacity
+            val t = ts[idx]
+            if (t in startNanos..endNanos) {
+                tList.add(t)
+                mList.add(sqrt(xs[idx] * xs[idx] + ys[idx] * ys[idx] + zs[idx] * zs[idx]))
+            }
+        }
+        if (tList.size < 2) return Verdict(steps, Reason.INSUFFICIENT_DATA_TRUSTED)
+
+        val spanSec = (tList.last() - tList.first()) / 1e9
+        var maxGapSec = 0.0
+        for (i in 1 until tList.size) maxGapSec = max(maxGapSec, (tList[i] - tList[i - 1]) / 1e9)
+        if (spanSec < MIN_SPAN_SEC || maxGapSec > MAX_GAP_SEC) {
+            return Verdict(steps, Reason.INSUFFICIENT_DATA_TRUSTED)
+        }
+
+        // 2. Physically impossible rate (the window can be shorter than the walk that
+        //    produced a batched report, so allow for one hardware batch).
+        val windowSec = max(spanSec, (endNanos - startNanos) / 1e9)
+        if (steps > (MAX_STEP_RATE_HZ * windowSec).roundToLong() + BATCH_ALLOWANCE_STEPS) {
+            return Verdict(0L, Reason.IMPOSSIBLE_RATE)
+        }
+
+        // 3. Resample |a| to a uniform grid, remove the mean (gravity + calibration bias).
+        val signal = resample(tList, mList)
+        val mean = signal.average().toFloat()
+        for (i in signal.indices) signal[i] -= mean
+        val smooth = movingAverage(signal, 3)
+        var sq = 0.0
+        for (v in smooth) sq += v * v
+        val rms = sqrt(sq / smooth.size).toFloat()
+
+        if (rms < STILL_RMS) return Verdict(0L, Reason.STILL, rms = rms)
+
+        // 4. Dominant period via normalized autocorrelation over lags 0.08 s .. 1.3 s.
+        val minLag = (0.08 * RESAMPLE_HZ).toInt()
+        val maxLag = min((1.3 * RESAMPLE_HZ).toInt(), smooth.size / 2)
+        if (maxLag <= minLag + 2) return Verdict(steps, Reason.INSUFFICIENT_DATA_TRUSTED, rms = rms)
+        val ac = autocorrelation(smooth, maxLag)
+
+        // Local maxima, then the strongest one; prefer the shortest lag whose peak is almost
+        // as strong (the step period rather than the stride = 2 steps).
+        var bestLag = -1
+        var bestVal = -1f
+        val peaks = ArrayList<Int>()
+        for (lag in minLag + 1 until maxLag) {
+            if (ac[lag] > ac[lag - 1] && ac[lag] >= ac[lag + 1] && ac[lag] > 0f) {
+                peaks.add(lag)
+                if (ac[lag] > bestVal) { bestVal = ac[lag]; bestLag = lag }
+            }
+        }
+        if (bestLag < 0) return Verdict(0L, Reason.NO_RHYTHM, rms = rms)
+        var stepLag = bestLag
+        for (lag in peaks) {
+            if (lag < stepLag && ac[lag] >= 0.8f * bestVal) { stepLag = lag; break }
+        }
+        val cadence = (RESAMPLE_HZ / stepLag).toFloat()
+        val periodicity = ac[stepLag]
+
+        if (cadence > MAX_CADENCE_HZ && periodicity >= MIN_PERIODICITY) {
+            // The fundamental rhythm is faster than any human gait: hand shaking, leg
+            // jiggling while sitting, vibration. (Its multiples also show up as peaks in the
+            // gait range, which is why the *shortest* strong period is used, not any peak.)
+            return Verdict(0L, Reason.TOO_FAST_SHAKING, cadence, periodicity, rms)
+        }
+        if (periodicity < MIN_PERIODICITY) {
+            return Verdict(0L, Reason.NO_RHYTHM, cadence, periodicity, rms)
+        }
+        return Verdict(steps, Reason.ACCEPTED, cadence, periodicity, rms)
+    }
+
+    private fun resample(t: List<Long>, m: List<Float>): FloatArray {
+        val t0 = t.first()
+        val span = (t.last() - t0) / 1e9
+        val n = max(2, (span * RESAMPLE_HZ).toInt() + 1)
+        val out = FloatArray(n)
+        var j = 0
+        for (i in 0 until n) {
+            val tt = t0 + (i / RESAMPLE_HZ * 1e9).toLong()
+            while (j < t.size - 2 && t[j + 1] < tt) j++
+            val ta = t[j]; val tb = t[j + 1]
+            val frac = if (tb > ta) ((tt - ta).toDouble() / (tb - ta)).coerceIn(0.0, 1.0) else 0.0
+            out[i] = (m[j] + (m[j + 1] - m[j]) * frac).toFloat()
+        }
+        return out
+    }
+
+    private fun movingAverage(x: FloatArray, w: Int): FloatArray {
+        val out = FloatArray(x.size)
+        val h = w / 2
+        for (i in x.indices) {
+            var s = 0f
+            var c = 0
+            for (k in max(0, i - h)..min(x.size - 1, i + h)) { s += x[k]; c++ }
+            out[i] = s / c
+        }
+        return out
+    }
+
+    /** Normalized (unbiased-length) autocorrelation r(lag) in [-1, 1]. */
+    private fun autocorrelation(x: FloatArray, maxLag: Int): FloatArray {
+        val out = FloatArray(maxLag + 1)
+        for (lag in 0..maxLag) {
+            var num = 0.0
+            var e1 = 0.0
+            var e2 = 0.0
+            for (i in 0 until x.size - lag) {
+                num += x[i] * x[i + lag]
+                e1 += x[i] * x[i]
+                e2 += x[i + lag] * x[i + lag]
+            }
+            val den = sqrt(e1 * e2)
+            out[lag] = if (den > 1e-9) (num / den).toFloat() else 0f
+        }
+        return out
     }
 }

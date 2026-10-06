@@ -224,19 +224,13 @@ class StepProvider extends ChangeNotifier {
     try {
       await _tracker.setNativeStepGoal(_dailyGoal);
     } catch (_) {}
-    if (_todayRecord == null) {
-      _todayRecord = StepRecord(
-        uid: uid,
-        date: todayStr,
-        stepCount: 0,
-        goal: _dailyGoal,
-      );
-      await _db.upsertStepRecord(_todayRecord!);
-    } else if (_todayRecord!.goal != _dailyGoal) {
-      // FIX H5: Reconcile — the DB may have an old/stale goal (e.g. 6000) while
-      // the user has since changed it to 10,000 via the goal dialog. Sync the DB row.
-      _todayRecord = _todayRecord!.copyWith(goal: _dailyGoal);
-      await _db.upsertStepRecord(_todayRecord!);
+    // Goal-only writes: step_count is owned by the native StepRepository, so Dart
+    // never writes a (possibly stale) step count back to the database.
+    if (_todayRecord == null || _todayRecord!.goal != _dailyGoal) {
+      await _db.updateStepGoal(uid, todayStr, _dailyGoal);
+      _todayRecord = (_todayRecord ??
+              StepRecord(uid: uid, date: todayStr, stepCount: 0))
+          .copyWith(goal: _dailyGoal);
     }
 
     await _seedSeptemberRecordsOnce(uid);
@@ -244,19 +238,19 @@ class StepProvider extends ChangeNotifier {
     _historyRecords = await _db.getAllStepRecords(uid);
     for (final record in _historyRecords) {
       if (record.goal != _dailyGoal) {
-        await _db.upsertStepRecord(record.copyWith(goal: _dailyGoal));
+        await _db.updateStepGoal(uid, record.date, _dailyGoal);
       }
     }
     _historyRecords = await _db.getAllStepRecords(uid);
 
-    // Attach tracker callbacks
+    // Attach tracker callbacks — the native value is the only step count shown.
     _tracker.onStepUpdate = (steps) async {
-      final currentTodayStr = formatCanonicalDate();
-      if (_todayRecord == null || _todayRecord!.date != currentTodayStr) {
+      final stepDate = _tracker.todayDate ?? formatCanonicalDate();
+      if (_todayRecord == null || _todayRecord!.date != stepDate) {
         // Date boundary crossed while app is open
         _todayRecord = StepRecord(
           uid: uid,
-          date: currentTodayStr,
+          date: stepDate,
           stepCount: steps,
           goal: _dailyGoal,
         );
@@ -274,11 +268,11 @@ class StepProvider extends ChangeNotifier {
     await _tracker.init(uid);
 
     final freshTodayStr = formatCanonicalDate();
-    _todayRecord = await _db.getStepRecord(uid, freshTodayStr);
-    // Final goal reconciliation after tracker init (tracker may have written 6000 to DB before this fix)
-    if (_todayRecord != null && _todayRecord!.goal != _dailyGoal) {
+    _todayRecord = _withLiveSteps(
+        await _db.getStepRecord(uid, freshTodayStr), uid, freshTodayStr);
+    if (_todayRecord!.goal != _dailyGoal) {
       _todayRecord = _todayRecord!.copyWith(goal: _dailyGoal);
-      await _db.upsertStepRecord(_todayRecord!);
+      await _db.updateStepGoal(uid, freshTodayStr, _dailyGoal);
     }
     _historyRecords = await _db.getAllStepRecords(uid);
 
@@ -330,7 +324,8 @@ class StepProvider extends ChangeNotifier {
     await _tracker.refreshSteps(uid: uid);
 
     final todayStr = formatCanonicalDate();
-    _todayRecord = await _db.getStepRecord(uid, todayStr);
+    _todayRecord =
+        _withLiveSteps(await _db.getStepRecord(uid, todayStr), uid, todayStr);
     _historyRecords = await _db.getAllStepRecords(uid);
 
     notifyListeners();
@@ -343,7 +338,7 @@ class StepProvider extends ChangeNotifier {
 
     if (_todayRecord != null) {
       _todayRecord = _todayRecord!.copyWith(goal: newGoal);
-      await _db.upsertStepRecord(_todayRecord!);
+      await _db.updateStepGoal(uid, _todayRecord!.date, newGoal);
     }
 
     // FIX C2: Push the updated goal to native (Kotlin) SharedPreferences so that
@@ -357,29 +352,30 @@ class StepProvider extends ChangeNotifier {
   }
 
   Future<void> addManualSteps(String uid, int additionalSteps) async {
-    if (_todayRecord == null) return;
-    final current = _todayRecord!.stepCount;
-    final updated =
-        _todayRecord!.copyWith(stepCount: current + additionalSteps);
-    _todayRecord = updated;
-    await _db.upsertStepRecord(updated);
-
-    final idx = _historyRecords.indexWhere((r) => r.id == updated.id);
-    if (idx != -1) {
-      _historyRecords[idx] = updated;
-    } else {
-      _historyRecords.insert(0, updated);
+    if (_todayRecord == null || additionalSteps <= 0) return;
+    // Manual steps are added to the native authoritative count (the same value the
+    // notification shows); the update arrives back through onStepUpdate.
+    final total = await _tracker.addManualSteps(additionalSteps);
+    if (_todayRecord != null && total > _todayRecord!.stepCount) {
+      _todayRecord = _todayRecord!.copyWith(stepCount: total);
     }
-
-    // BUG 3 FIX: Lower the native baseline by additionalSteps so that when the
-    // hardware sensor fires its next onSensorChanged callback, the formula
-    // `todaySteps = rawSteps - baseline` naturally includes the manual steps
-    // and does NOT erase them by overwriting SQLite with a lower value.
-    try {
-      final todayStr = StepProvider.formatCanonicalDate();
-      await _tracker.adjustManualStepsBaseline(additionalSteps, todayStr);
-    } catch (_) {}
-
+    final idx = _historyRecords.indexWhere((r) => r.date == _todayRecord!.date);
+    if (idx != -1) {
+      _historyRecords[idx] = _todayRecord!;
+    } else {
+      _historyRecords.insert(0, _todayRecord!);
+    }
     notifyListeners();
+  }
+
+  /// Today's record carrying the live native count, so the app always shows exactly the
+  /// value the notification shows (the DB row is written by native code moments later).
+  StepRecord _withLiveSteps(StepRecord? record, String uid, String date) {
+    final base =
+        record ?? StepRecord(uid: uid, date: date, stepCount: 0, goal: _dailyGoal);
+    if (_tracker.todayDate == date && _tracker.todaySteps != base.stepCount) {
+      return base.copyWith(stepCount: _tracker.todaySteps);
+    }
+    return base;
   }
 }

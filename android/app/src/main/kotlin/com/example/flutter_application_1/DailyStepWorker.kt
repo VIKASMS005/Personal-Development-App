@@ -1,13 +1,10 @@
 package com.example.flutter_application_1
 
 import android.Manifest
-import android.content.ContentValues
 import android.content.Context
 import android.content.pm.PackageManager
-import android.database.sqlite.SQLiteDatabase
 import android.hardware.Sensor
 import android.hardware.SensorEvent
-import android.hardware.SensorEventListener
 import android.hardware.SensorEventListener2
 import android.hardware.SensorManager
 import android.os.Build
@@ -16,25 +13,14 @@ import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 
 class DailyStepWorker(
     private val context: Context,
     workerParams: WorkerParameters
 ) : CoroutineWorker(context, workerParams) {
-
-    companion object {
-        private const val PREFS_NAME = "grow_step_prefs"
-        private const val KEY_RAW_STEPS = "grow_raw_steps"
-        private const val KEY_STEP_DATE = "grow_step_date"
-        private const val KEY_BASELINE_PREFIX = "grow_baseline_"
-        private const val KEY_CURRENT_UID = "grow_current_uid"
-    }
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         try {
@@ -53,14 +39,15 @@ class DailyStepWorker(
                 ?: return@withContext Result.success()
 
             // Fetch live hardware step count using flush + CountDownLatch
-            var rawSteps = 0L
+            // Events arrive on the main looper; read on this IO thread.
+            val latest = AtomicLong(0L)
             val latch = CountDownLatch(1)
             val listener = object : SensorEventListener2 {
                 override fun onSensorChanged(event: SensorEvent?) {
                     if (event != null && event.sensor.type == Sensor.TYPE_STEP_COUNTER) {
                         val count = event.values[0].toLong()
                         if (count > 0L) {
-                            rawSteps = count
+                            latest.set(count)
                             latch.countDown()
                         }
                     }
@@ -78,35 +65,18 @@ class DailyStepWorker(
 
             latch.await(1000, TimeUnit.MILLISECONDS)
             sensorManager.unregisterListener(listener)
+            val rawSteps = latest.get()
 
-            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            // Same single source of truth as the service: feed the absolute counter value.
+            // Delta-based counting makes this a no-op if the service already saw it.
+            StepRepository.init(context)
+            if (rawSteps > 0L) StepRepository.onCounter(rawSteps)
+            StepRepository.tick(force = !StepTrackingService.isRunning)
+            StepRepository.flush()
 
-            // If sensor timed out, fall back to last recorded raw steps
-            if (rawSteps <= 0L) {
-                rawSteps = prefs.getLong(KEY_RAW_STEPS, 0L)
-            }
-            if (rawSteps <= 0L) {
-                return@withContext Result.success()
-            }
-
-            val today = StepDbHelper.getLocalTodayString()
-            val uid = prefs.getString(KEY_CURRENT_UID, "local_user") ?: "local_user"
-
-            // Check and process day rollover if midnight occurred
-            StepDbHelper.handleDateRollover(context, rawSteps, today)
-
-            // Calculate steps for today, accounting for validated/discarded steps
-            val todayBaseline = prefs.getLong(KEY_BASELINE_PREFIX + today, rawSteps)
-            val totalRawDelta = if (rawSteps >= todayBaseline) (rawSteps - todayBaseline) else 0L
-
-            // Subtract discarded steps (those that failed gait validation)
-            val discardedSteps = prefs.getLong("grow_discarded_steps_$today", 0L)
-            val validatedSteps = maxOf(0L, totalRawDelta - discardedSteps)
-
-            val persisted = StepDbHelper.writeStepRecord(context, uid, today, validatedSteps)
-            if (!persisted) {
-                return@withContext Result.retry()
-            }
+            // Bring the foreground service back if the system stopped it (allowed from a
+            // worker on most versions; failures are caught inside start()).
+            if (!StepTrackingService.isRunning) StepTrackingService.start(context)
 
             Result.success()
         } catch (e: Exception) {

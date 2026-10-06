@@ -31,50 +31,61 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 
 /**
- * StepTrackingService — Foreground service for continuous step tracking with
- * orientation-independent gait validation (v5).
+ * StepTrackingService — the ONLY component that listens to step sensors.
  *
- * Architecture:
- *   1. Hardware Sensor Registration:
- *      - TYPE_STEP_COUNTER (primary source of cumulative hardware steps).
- *      - TYPE_STEP_DETECTOR (per-step trigger, cadence tracking, and fallback).
- *   2. TYPE_ACCELEROMETER feeds GaitValidator for 3D dynamic magnitude analysis.
- *   3. Position Independence:
- *      - Works in trouser pocket, jacket, hand, or backpack.
- *      - Does not rely on specific axes or vertical/horizontal orientation.
- *      - Trust-first: If phone was asleep in pocket/bag (few accelerometer samples),
- *        steps from hardware counter are accepted 100%.
- *   4. Fast shaking, violent shaking, and vehicle vibration are rejected cleanly.
+ *   TYPE_STEP_COUNTER (wake-up)  ──► StepRepository.onCounter      (primary source)
+ *   TYPE_STEP_DETECTOR           ──► StepRepository.onDetectorStep (only if no counter)
+ *   TYPE_ACCELEROMETER           ──► StepRepository.onAccelerometer (gait validation)
+ *
+ * It holds no step arithmetic and no step state of its own: the foreground notification
+ * simply renders StepRepository's snapshot, which is the same value the app shows.
+ *
+ * Android creates at most one instance of a Service, and sensors are registered once in
+ * onCreate (and unregistered in onDestroy), so repeated start requests cannot create
+ * duplicate listeners. Because the step counter is cumulative and StepRepository counts
+ * deltas, even a duplicate reading cannot add steps twice.
  */
 class StepTrackingService : Service(), SensorEventListener2 {
     companion object {
         private const val TAG = "StepTrackingService"
         private const val CHANNEL_ID = "grow_step_progress"
         private const val NOTIFICATION_ID = 4101
-        private const val PREFS_NAME = "grow_step_prefs"
-        private const val KEY_RAW_STEPS = "grow_raw_steps"
         private const val ACTION_MIDNIGHT = "com.example.flutter_application_1.STEP_MIDNIGHT"
+        private const val ACTION_FLUSH = "com.example.flutter_application_1.STEP_FLUSH"
 
-        // Validation runs periodically every 10 seconds
-        private const val VALIDATION_INTERVAL_MS = 10_000L
+        /** How often pending steps are checked for validation while the CPU is awake. */
+        private const val TICK_INTERVAL_MS = 2_000L
 
-        // Storage keys for validation state
-        private const val KEY_VALIDATED_OFFSET = "grow_validated_offset_"
-        private const val KEY_DISCARDED_STEPS = "grow_discarded_steps_"
+        @Volatile
+        var isRunning = false
+            private set
 
         fun start(context: Context) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
                 ContextCompat.checkSelfPermission(context, Manifest.permission.ACTIVITY_RECOGNITION) != PackageManager.PERMISSION_GRANTED
             ) return
-            val intent = Intent(context, StepTrackingService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent)
-            else context.startService(intent)
+            startWithAction(context, null)
         }
 
-        fun startAtMidnight(context: Context) {
-            val intent = Intent(context, StepTrackingService::class.java).apply { action = ACTION_MIDNIGHT }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent)
-            else context.startService(intent)
+        fun startAtMidnight(context: Context) = startWithAction(context, ACTION_MIDNIGHT)
+
+        /** Ask the running service to flush batched sensor events (fresh value for the UI). */
+        fun requestFlush(context: Context) {
+            if (isRunning) startWithAction(context, ACTION_FLUSH)
+        }
+
+        private fun startWithAction(context: Context, action: String?) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                ContextCompat.checkSelfPermission(context, Manifest.permission.ACTIVITY_RECOGNITION) != PackageManager.PERMISSION_GRANTED
+            ) return
+            val intent = Intent(context, StepTrackingService::class.java).apply { this.action = action }
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent)
+                else context.startService(intent)
+            } catch (e: Exception) {
+                // e.g. ForegroundServiceStartNotAllowedException from the background on Android 12+.
+                Log.w(TAG, "Could not start step service: ${e.message}")
+            }
         }
     }
 
@@ -82,286 +93,87 @@ class StepTrackingService : Service(), SensorEventListener2 {
     private var stepCounterSensor: Sensor? = null
     private var stepDetectorSensor: Sensor? = null
     private var accelSensor: Sensor? = null
+    private var sensorsRegistered = false
 
-    // Orientation-independent gait validation engine
-    private val gaitValidator = GaitValidator()
-
-    // Quarantine: raw step counter value at last validation checkpoint
-    private var lastValidatedRaw = 0L
-    // Total steps discarded today (false positives)
-    private var discardedStepsToday = 0L
-    // The last raw step counter value seen
-    private var lastSeenRaw = 0L
-    private var lastHardwareCounterRaw = 0L
-    private var detectorStepsSinceCounter = 0L
-    // Whether we've received at least one step event
-    private var hasReceivedStepEvent = false
-
-    // Fallback step accumulation when TYPE_STEP_COUNTER is absent
-    private var fallbackAccumulatedSteps = 0L
-
-    // Periodic validation handler
     private val handler = Handler(Looper.getMainLooper())
-    private val validationRunnable = object : Runnable {
+    private val tickRunnable = object : Runnable {
         override fun run() {
-            performValidation()
-            handler.postDelayed(this, VALIDATION_INTERVAL_MS)
+            StepRepository.tick()
+            handler.postDelayed(this, TICK_INTERVAL_MS)
         }
+    }
+
+    private val repositoryListener = StepRepository.Listener { snapshot ->
+        updateNotification(snapshot.steps, snapshot.goal)
     }
 
     override fun onCreate() {
         super.onCreate()
+        isRunning = true
+        StepRepository.init(this)
         createNotificationChannel()
-        startForegroundCompat(buildNotification(0L, 0))
+        val initial = StepRepository.snapshot()
+        startForegroundCompat(buildNotification(initial.steps, initial.goal))
 
-        sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
-
-        // 1. Register TYPE_STEP_COUNTER (primary hardware step counter)
-        stepCounterSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_STEP_COUNTER, true)
-            ?: sensorManager?.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
-        stepCounterSensor?.let {
-            sensorManager?.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL, 1_000_000)
-        }
-
-        // 2. Register TYPE_STEP_DETECTOR (step cadence & real-time counter)
-        stepDetectorSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR, true)
-            ?: sensorManager?.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR)
-        stepDetectorSensor?.let {
-            sensorManager?.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL, 1_000_000)
-        }
-
-        // 3. Register TYPE_ACCELEROMETER for gait validation (~50Hz)
-        accelSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
-        accelSensor?.let {
-            sensorManager?.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
-        }
-
-        // 4. Load persisted validation state for today
-        loadValidationState()
-
-        // 5. Start periodic validation timer
-        handler.postDelayed(validationRunnable, VALIDATION_INTERVAL_MS)
+        registerSensorsOnce()
+        StepRepository.addListener(repositoryListener)
+        handler.postDelayed(tickRunnable, TICK_INTERVAL_MS)
 
         Log.d(TAG, "StepTrackingService created. Counter: ${stepCounterSensor != null}, Detector: ${stepDetectorSensor != null}, Accel: ${accelSensor != null}")
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_MIDNIGHT) {
-            val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            val raw = prefs.getLong(KEY_RAW_STEPS, 0L)
-            if (raw > 0L) StepDbHelper.handleDateRollover(this, raw, StepDbHelper.getLocalTodayString())
+    private fun registerSensorsOnce() {
+        if (sensorsRegistered) return
+        val sm = getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        sensorManager = sm
 
-            // Reset validation state for new day
-            resetValidationStateForNewDay()
+        // Primary: hardware step counter (wake-up variant so batched steps wake the CPU
+        // while the screen is off / phone is locked).
+        stepCounterSensor = sm.getDefaultSensor(Sensor.TYPE_STEP_COUNTER, true)
+            ?: sm.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
+        stepCounterSensor?.let { sm.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL, 1_000_000) }
+
+        // Fallback only: the step detector is NOT combined with the counter any more
+        // (doing so double counted and let rejected detector steps through).
+        if (stepCounterSensor == null) {
+            stepDetectorSensor = sm.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR, true)
+                ?: sm.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR)
+            stepDetectorSensor?.let { sm.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL, 1_000_000) }
         }
+
+        // Accelerometer (~50 Hz) for gait validation.
+        accelSensor = sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+        accelSensor?.let { sm.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME) }
+
+        sensorsRegistered = true
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_MIDNIGHT -> StepRepository.tick(force = true) // rolls the day over if needed
+            ACTION_FLUSH -> {}
+        }
+        try { sensorManager?.flush(this) } catch (_: Exception) {}
+        // Every startForegroundService() call must be answered with startForeground().
+        val s = StepRepository.snapshot()
+        startForegroundCompat(buildNotification(s.steps, s.goal))
         return START_STICKY
     }
 
     override fun onSensorChanged(event: SensorEvent?) {
         if (event == null) return
-
         when (event.sensor.type) {
-            Sensor.TYPE_STEP_COUNTER -> handleStepCounterEvent(event)
-            Sensor.TYPE_STEP_DETECTOR -> handleStepDetectorEvent(event)
-            Sensor.TYPE_ACCELEROMETER -> handleAccelerometerEvent(event)
+            Sensor.TYPE_STEP_COUNTER -> StepRepository.onCounter(event.values[0].toLong())
+            Sensor.TYPE_STEP_DETECTOR -> StepRepository.onDetectorStep()
+            Sensor.TYPE_ACCELEROMETER ->
+                StepRepository.onAccelerometer(event.values[0], event.values[1], event.values[2], event.timestamp)
         }
-    }
-
-    /**
-     * Handle TYPE_STEP_DETECTOR events.
-     * Fires on EVERY single step with immediate low latency (< 50ms).
-     * Advances real-time step counter immediately.
-     */
-    private fun handleStepDetectorEvent(event: SensorEvent) {
-        gaitValidator.recordStepArrival(event.timestamp)
-
-        detectorStepsSinceCounter++
-        val effectiveRaw = if (lastHardwareCounterRaw > 0L) {
-            lastHardwareCounterRaw + detectorStepsSinceCounter
-        } else if (lastSeenRaw > 0L) {
-            lastSeenRaw + detectorStepsSinceCounter
-        } else {
-            detectorStepsSinceCounter
-        }
-        dispatchServiceStepUpdate(effectiveRaw)
-    }
-
-    /**
-     * Handle TYPE_STEP_COUNTER events.
-     * Reports cumulative hardware counter. Reconciles with real-time detector
-     * steps so there is ZERO double-counting.
-     */
-    private fun handleStepCounterEvent(event: SensorEvent) {
-        val counterRaw = event.values[0].toLong()
-        if (counterRaw <= 0L) return
-
-        gaitValidator.recordStepArrival(event.timestamp)
-
-        if (counterRaw > lastHardwareCounterRaw) {
-            val totalEffective = maxOf(counterRaw, lastHardwareCounterRaw + detectorStepsSinceCounter)
-            lastHardwareCounterRaw = counterRaw
-            // Reconcile pending detector steps
-            detectorStepsSinceCounter = maxOf(0L, totalEffective - counterRaw)
-        } else if (lastHardwareCounterRaw == 0L) {
-            lastHardwareCounterRaw = counterRaw
-            detectorStepsSinceCounter = 0L
-        }
-
-        val effectiveRaw = lastHardwareCounterRaw + detectorStepsSinceCounter
-        dispatchServiceStepUpdate(effectiveRaw)
-    }
-
-    /**
-     * Common step update handler for foreground service: records raw steps,
-     * checks reboots, updates notifications.
-     */
-    private fun dispatchServiceStepUpdate(raw: Long) {
-        if (raw <= 0L) return
-
-        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val previous = prefs.getLong(KEY_RAW_STEPS, 0L)
-        val today = StepDbHelper.getLocalTodayString()
-
-        prefs.edit().putLong(KEY_RAW_STEPS, raw).apply()
-        lastSeenRaw = raw
-
-        if (!hasReceivedStepEvent) {
-            hasReceivedStepEvent = true
-            if (lastValidatedRaw == 0L) {
-                lastValidatedRaw = raw
-            }
-        }
-
-        // Handle hardware counter reset (device reboot)
-        if (previous > 0L && raw < previous) {
-            StepDbHelper.handleDateRollover(this, raw, today)
-            lastValidatedRaw = raw
-            discardedStepsToday = 0L
-            saveValidationState()
-            updateNotification(0L, 0)
-            return
-        }
-
-        // Handle calendar date rollover
-        StepDbHelper.handleDateRollover(this, raw, today)
-
-        // Update notification with current validated count
-        val baseline = prefs.getLong("grow_baseline_$today", raw)
-        if (raw >= baseline) {
-            val totalRawDelta = raw - baseline
-            val currentDiscarded = prefs.getLong(KEY_DISCARDED_STEPS + today, discardedStepsToday)
-            discardedStepsToday = currentDiscarded
-            val validatedSteps = maxOf(0L, totalRawDelta - currentDiscarded)
-            val rebootOffset = prefs.getLong("grow_pre_reboot_offset_$today", 0L)
-            val displaySteps = maxOf(0L, validatedSteps + rebootOffset)
-            val goal = prefs.getInt("grow_daily_step_goal", 6000)
-            updateNotification(displaySteps, goal)
-        }
-    }
-
-    /**
-     * Handle TYPE_ACCELEROMETER events.
-     * Feeds 3D data to GaitValidator.
-     */
-    private fun handleAccelerometerEvent(event: SensorEvent) {
-        gaitValidator.addSample(event.values[0], event.values[1], event.values[2], event.timestamp)
-    }
-
-    /**
-     * Periodic validation: Analyze gait dynamics.
-     * Promotes genuine walking steps and discards active shaking.
-     */
-    private fun performValidation() {
-        if (!hasReceivedStepEvent || lastSeenRaw == 0L) return
-
-        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val today = StepDbHelper.getLocalTodayString()
-        val uid = prefs.getString("grow_current_uid", "local_user") ?: "local_user"
-        val baseline = prefs.getLong("grow_baseline_$today", lastSeenRaw)
-
-        // Sync with SharedPreferences (which may be updated by MainActivity)
-        val savedValidatedRaw = prefs.getLong(KEY_VALIDATED_OFFSET + today, 0L)
-        if (savedValidatedRaw > 0L) {
-            lastValidatedRaw = maxOf(lastValidatedRaw, savedValidatedRaw)
-        }
-        discardedStepsToday = prefs.getLong(KEY_DISCARDED_STEPS + today, 0L)
-
-        val rawDeltaSinceLastValidation = lastSeenRaw - lastValidatedRaw
-        if (rawDeltaSinceLastValidation <= 0) {
-            return
-        }
-
-        // Run orientation-independent analysis
-        gaitValidator.analyze()
-
-        if (gaitValidator.isShakingMotion()) {
-            // Active phone shaking or vehicle vibration detected
-            discardedStepsToday += rawDeltaSinceLastValidation
-            lastValidatedRaw = lastSeenRaw
-            Log.d(TAG, "GaitValidator: DISCARDED $rawDeltaSinceLastValidation steps as invalid (discarded_today=$discardedStepsToday)")
-        } else {
-            // Valid walking (in pocket, bag, hand, etc.)
-            lastValidatedRaw = lastSeenRaw
-            Log.d(TAG, "GaitValidator: ACCEPTED $rawDeltaSinceLastValidation steps (genuine walking)")
-        }
-
-        saveValidationState()
-
-        // Write validated steps to SQLite
-        if (lastSeenRaw >= baseline) {
-            val totalRawDelta = lastSeenRaw - baseline
-            val validatedSteps = maxOf(0L, totalRawDelta - discardedStepsToday)
-            StepDbHelper.writeStepRecord(this, uid, today, validatedSteps)
-
-            val goal = prefs.getInt("grow_daily_step_goal", 6000)
-            val rebootOffset = prefs.getLong("grow_pre_reboot_offset_$today", 0L)
-            val displaySteps = maxOf(0L, validatedSteps + rebootOffset)
-            updateNotification(displaySteps, goal)
-        }
-    }
-
-    private fun loadValidationState() {
-        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val today = StepDbHelper.getLocalTodayString()
-        val cleanupDone = prefs.getBoolean("grow_cleanup_v6_done", false)
-        if (!cleanupDone) {
-            // Clear any bogus discarded steps accumulated by previous buggy validator
-            prefs.edit()
-                .putLong(KEY_DISCARDED_STEPS + today, 0L)
-                .putLong(KEY_VALIDATED_OFFSET + today, 0L)
-                .putBoolean("grow_cleanup_v6_done", true)
-                .apply()
-            discardedStepsToday = 0L
-            lastValidatedRaw = 0L
-        } else {
-            discardedStepsToday = prefs.getLong(KEY_DISCARDED_STEPS + today, 0L)
-            lastValidatedRaw = prefs.getLong(KEY_VALIDATED_OFFSET + today, 0L)
-        }
-    }
-
-    private fun saveValidationState() {
-        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val today = StepDbHelper.getLocalTodayString()
-        prefs.edit()
-            .putLong(KEY_DISCARDED_STEPS + today, discardedStepsToday)
-            .putLong(KEY_VALIDATED_OFFSET + today, lastValidatedRaw)
-            .apply()
-    }
-
-    private fun resetValidationStateForNewDay() {
-        discardedStepsToday = 0L
-        lastValidatedRaw = lastSeenRaw
-        gaitValidator.reset()
-        saveValidationState()
     }
 
     private fun updateNotification(steps: Long, goal: Int) {
-        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val effectiveGoal = if (goal > 0) goal else prefs.getInt("grow_daily_step_goal", 6000)
-        val progress = if (effectiveGoal > 0) ((steps * 100L) / effectiveGoal).coerceIn(0L, 100L).toInt() else 0
         getSystemService(NotificationManager::class.java).notify(
             NOTIFICATION_ID,
-            buildNotification(steps, effectiveGoal, progress)
+            buildNotification(steps, goal)
         )
     }
 
@@ -411,7 +223,7 @@ class StepTrackingService : Service(), SensorEventListener2 {
     }
 
     private fun buildNotification(steps: Long, goal: Int = 0, progress: Int = 0): Notification {
-        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val prefs = getSharedPreferences("grow_step_prefs", Context.MODE_PRIVATE)
         val effectiveGoal = if (goal > 0) goal else prefs.getInt("grow_daily_step_goal", 6000)
         val effectiveProgress = if (effectiveGoal > 0) ((steps * 100L) / effectiveGoal).coerceIn(0L, 100L).toInt() else progress
 
@@ -489,8 +301,12 @@ class StepTrackingService : Service(), SensorEventListener2 {
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
     override fun onFlushCompleted(sensor: Sensor?) = Unit
     override fun onDestroy() {
-        handler.removeCallbacks(validationRunnable)
+        handler.removeCallbacks(tickRunnable)
+        StepRepository.removeListener(repositoryListener)
         sensorManager?.unregisterListener(this)
+        sensorsRegistered = false
+        StepRepository.flush()
+        isRunning = false
         super.onDestroy()
     }
     override fun onBind(intent: Intent?): IBinder? = null
