@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models/reminder.dart';
+import '../models/todo.dart';
 import '../services/database_service.dart';
 import '../services/notification_service.dart';
 
@@ -9,6 +10,11 @@ class ReminderProvider extends ChangeNotifier {
   bool _isLoading = false;
 
   List<Reminder> get reminders => _reminders;
+
+  /// Called after a task row was changed from the reminders side, so the
+  /// in-memory task list can take the saved version (otherwise a later save of
+  /// the stale task would write the old title/reminder/completion back).
+  void Function(Todo task)? onTaskChanged;
   bool get isLoading => _isLoading;
   int get activeCount => _reminders.where((r) => !r.isCompleted).length;
 
@@ -81,6 +87,26 @@ class ReminderProvider extends ChangeNotifier {
     }
   }
 
+  /// Schedules a notification for every reminder still to come (e.g. after
+  /// restoring a backup, whose reminders were only written to the database).
+  Future<void> rescheduleUpcoming() async {
+    final now = DateTime.now();
+    for (final r in _reminders) {
+      if (r.isDeleted || r.isCompleted || !r.dateTime.isAfter(now)) continue;
+      await NotificationService.scheduleReminder(
+        id: NotificationService.stableId(r.id),
+        title: r.id.startsWith('task_')
+            ? '🔔 Task Reminder: ${r.title}'
+            : '🔔 Reminder: ${r.title}',
+        dateTime: r.dateTime,
+        body: r.description.isNotEmpty
+            ? r.description
+            : 'Time for your scheduled reminder!',
+        reminderId: r.id,
+      );
+    }
+  }
+
   Future<void> addReminder(Reminder r) async {
     _reminders.add(r);
     _reminders.sort((a, b) => a.dateTime.compareTo(b.dateTime));
@@ -131,14 +157,16 @@ class ReminderProvider extends ChangeNotifier {
         final matches = taskList.where((t) => t.id == taskId);
         if (matches.isNotEmpty) {
           final t = matches.first;
-          await _db.upsertTodo(t.copyWith(
+          final saved = t.copyWith(
             title: r.title,
             description: r.description,
             category: r.category,
             reminderDateTime: r.dateTime,
             completed: r.isCompleted,
             updatedAt: DateTime.now(),
-          ));
+          );
+          await _db.upsertTodo(saved);
+          onTaskChanged?.call(saved);
         }
       }
 
@@ -194,10 +222,11 @@ class ReminderProvider extends ChangeNotifier {
       final matches = tasks.where((t) => t.id == taskId);
       if (matches.isNotEmpty) {
         final t = matches.first;
-        await _db.upsertTodo(t.copyWith(
-          reminderDateTime: null,
-          updatedAt: DateTime.now(),
-        ));
+        // copyWith(reminderDateTime: null) would keep the old value, and the
+        // next load would then recreate the deleted reminder from the task.
+        final saved = t.copyWith(clearReminder: true, updatedAt: DateTime.now());
+        await _db.upsertTodo(saved);
+        onTaskChanged?.call(saved);
       }
     }
   }

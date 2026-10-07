@@ -60,13 +60,13 @@ class Habit {
         '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
     final todayKey = toDateKey(today);
-    final yesterdayKey = toDateKey(today.subtract(const Duration(days: 1)));
+    final yesterdayKey = toDateKey(DateTime(today.year, today.month, today.day - 1));
 
     DateTime cursor;
     if (history[todayKey] == true) {
       cursor = today;
     } else if (history[yesterdayKey] == true) {
-      cursor = today.subtract(const Duration(days: 1));
+      cursor = DateTime(today.year, today.month, today.day - 1);
     } else {
       return 0;
     }
@@ -76,7 +76,8 @@ class Habit {
       final key = toDateKey(cursor);
       if (history[key] == true) {
         streakCount++;
-        cursor = cursor.subtract(const Duration(days: 1));
+        // Calendar arithmetic: subtracting 24 h can skip a day across a DST change.
+        cursor = DateTime(cursor.year, cursor.month, cursor.day - 1);
       } else {
         break;
       }

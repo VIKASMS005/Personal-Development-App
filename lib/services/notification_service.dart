@@ -507,6 +507,7 @@ class NotificationService {
     required String body,
     required int hour,
     required int minute,
+    bool skipToday = false,
   }) async {
     final androidDetails = AndroidNotificationDetails(
       _channelId,
@@ -520,8 +521,8 @@ class NotificationService {
 
     final now = DateTime.now();
     var target = DateTime(now.year, now.month, now.day, hour, minute);
-    if (target.isBefore(now)) {
-      target = target.add(const Duration(days: 1));
+    if (skipToday || target.isBefore(now)) {
+      target = DateTime(now.year, now.month, now.day + 1, hour, minute);
     }
     final duration = target.difference(now);
     final scheduledDate = tz.TZDateTime.now(tz.local).add(duration);
@@ -540,9 +541,13 @@ class NotificationService {
   }
 
   // ==================== HABIT STREAK WARNING ====================
+  /// Daily 8:30 PM warning. When the habit is already done today the first
+  /// warning is tomorrow's, so the "you haven't completed it today" text is
+  /// never sent on a day it was completed.
   static Future<void> scheduleHabitStreakWarning({
     required int id,
     required String habitTitle,
+    bool doneToday = false,
   }) async {
     await scheduleDailyReminder(
       id: id,
@@ -550,6 +555,7 @@ class NotificationService {
       body: "Don't break the chain! You haven't completed $habitTitle today. Keep your momentum going!",
       hour: 20,
       minute: 30,
+      skipToday: doneToday,
     );
   }
 

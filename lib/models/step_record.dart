@@ -78,9 +78,10 @@ class StepRecord {
       date: map['date']?.toString() ?? '',
       stepCount: (map['step_count'] as num?)?.toInt() ?? 0,
       goal: (map['goal'] as num?)?.toInt() ?? 6000,
-      calories: (map['calories'] as num?)?.toDouble(),
-      distanceKm: (map['distance_km'] as num?)?.toDouble(),
-      activeMinutes: (map['active_minutes'] as num?)?.toInt(),
+      // Calories, distance and active minutes are estimates derived from the
+      // step count. They are recomputed here rather than read back, because
+      // older native writes used a different stride length (0.75 m), which
+      // made the same day show different distances in different places.
       updatedAt: map['updated_at'] != null
           ? DateTime.tryParse(map['updated_at'].toString()) ?? DateTime.now()
           : DateTime.now(),

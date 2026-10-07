@@ -234,7 +234,7 @@ class StepTrackingService : Service(), SensorEventListener2 {
         }
 
         val distanceKm = (steps * 0.762) / 1000.0
-        val calories = (steps * 0.04).toInt()
+        val calories = Math.round(steps * 0.04).toInt() // rounded, like the app
         val distanceText = if (distanceKm >= 10.0) "%.1f km".format(java.util.Locale.US, distanceKm) else "%.2f km".format(java.util.Locale.US, distanceKm)
 
         val stepsText = if (steps > 0L) {

@@ -26,18 +26,29 @@ class ScreenTimeProvider extends ChangeNotifier {
   bool get permissionChecked => _permissionChecked;
 
   String get todayFormattedTotal {
-    if (_todaySummary == null) return '0h 0m';
+    // No reading (not loaded yet, or no usage access) is not "0h 0m".
+    if (_todaySummary == null || !_hasPermission) return '—';
     final dur = _todaySummary!.totalDuration;
     final h = dur.inHours;
     final m = dur.inMinutes % 60;
     return '${h}h ${m}m';
   }
 
+  /// Days of this week that have happened (future days hold no data).
+  List<DailyScreenTimeSummary> get _elapsedThisWeek {
+    final n = DateTime.now();
+    final today = DateTime(n.year, n.month, n.day);
+    return _weeklySummaries
+        .where((s) => !(DateTime.tryParse(s.date)?.isAfter(today) ?? false))
+        .toList();
+  }
+
+  /// Average per day over the days of this week so far.
   double get weeklyDailyAverageHours {
-    if (_weeklySummaries.isEmpty) return 0.0;
-    final totalSec =
-        _weeklySummaries.fold(0, (sum, s) => sum + s.totalDuration.inSeconds);
-    return (totalSec / (_weeklySummaries.length * 3600.0));
+    final days = _elapsedThisWeek;
+    if (days.isEmpty) return 0.0;
+    final totalSec = days.fold(0, (sum, s) => sum + s.totalDuration.inSeconds);
+    return totalSec / (days.length * 3600.0);
   }
 
   Duration get thisWeekTotalDuration {
@@ -52,11 +63,16 @@ class ScreenTimeProvider extends ChangeNotifier {
     return Duration(seconds: sec);
   }
 
-  /// Percentage change in screen time compared to previous week (e.g. -12.5% or +8.0%)
-  double get weeklyPercentChange {
-    final lastSec = lastWeekTotalDuration.inSeconds;
+  /// Change versus last week, comparing the same number of days from the
+  /// start of each week (a half-finished week isn't judged against a whole
+  /// one). Null when last week has no usage to compare with.
+  double? get weeklyPercentChange {
+    final days = _elapsedThisWeek.length;
+    final lastSec = _prevWeeklySummaries
+        .take(days)
+        .fold(0, (sum, s) => sum + s.totalDuration.inSeconds);
     final thisSec = thisWeekTotalDuration.inSeconds;
-    if (lastSec <= 0) return 0.0;
+    if (lastSec <= 0) return null;
     return ((thisSec - lastSec) / lastSec) * 100.0;
   }
 

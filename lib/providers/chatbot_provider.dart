@@ -245,6 +245,7 @@ class ChatbotProvider extends ChangeNotifier {
       final todo = Todo(
         uid: msg.uid,
         title: (data['title'] ?? 'New Task').toString(),
+        createdAt: DateTime.now(),
         description: (data['description'] ?? '').toString(),
         category: (data['category'] ?? 'General').toString(),
         priority: (data['priority'] is int)

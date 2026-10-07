@@ -25,6 +25,7 @@ import 'screen_time_screen.dart';
 import '../widgets/global_task_tracker_bar.dart';
 import '../widgets/alarm_ringing_dialog.dart';
 import '../models/alarm_model.dart';
+import '../engine/grow_engine.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -67,6 +68,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       );
       _showAlarmRingingDialog(alarm, snoozeCount: snoozeCount);
     };
+
+    // Task edits made from the reminders list update the task list too.
+    final todoProvider = context.read<TodoProvider>();
+    final reminderProvider = context.read<ReminderProvider>();
+    reminderProvider.onTaskChanged = todoProvider.applySavedTodo;
+    final authProvider = context.read<AuthProvider>();
+    todoProvider.onRemindersChanged =
+        () => reminderProvider.loadReminders(authProvider.uid ?? 'local_user');
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadAllData();
@@ -324,7 +333,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final habits = context.watch<HabitProvider>();
     final journal = context.watch<JournalProvider>();
     final finance = context.watch<FinanceProvider>();
-    final engineProv = context.watch<EngineProvider>();
     final stepProv = context.watch<StepProvider>();
     final screenProv = context.watch<ScreenTimeProvider>();
 
@@ -335,28 +343,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final todayStr = DateFormat('yyyy-MM-dd').format(DateTime.now());
     final habitsDoneToday = activeHabits.where((h) => h.history[todayStr] == true).length;
 
-    // Rebuild engine when provider data changes
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      final timetable = context.read<TimetableProvider>().slots;
-      final reminders = context.read<ReminderProvider>().reminders;
-      context.read<EngineProvider>().rebuild(
-            habits: habits.habits,
-            todos: todos.todos,
-            journals: journal.entries,
-            transactions: finance.transactions,
-            timetableSlots: timetable,
-            reminders: reminders,
-            userName: profile.profile?.name ?? '',
-            todaySteps: stepProv.todaySteps,
-            stepGoal: stepProv.stepGoal,
-            todayCalories: stepProv.todayCalories,
-            todayDistanceKm: stepProv.todayDistanceKm,
-            todayActiveMinutes: stepProv.todayActiveMinutes,
-            todayScreenTime: screenProv.todayFormattedTotal,
-            totalFinanceBalance: finance.totalBalance,
-          );
-    });
+    // Today's progress is computed from the live provider data on every build.
+    // (Rebuilding EngineProvider here notified this same screen again and kept
+    // the whole home screen rebuilding every frame.)
+    final todayEngine = GrowEngine(
+      habits: habits.habits,
+      todos: todos.todos,
+      journals: journal.entries,
+      transactions: finance.transactions,
+    );
 
     return Scaffold(
       appBar: AppBar(
@@ -443,7 +438,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   children: [
                     // Slide 0: Today's Progress + Engine Insights
                     _TodayProgressCard(
-                      engineProv: engineProv,
+                      engine: todayEngine,
                       onAskAI: () => setState(() => _currentIndex = 2),
                     ),
 
@@ -803,7 +798,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final topApps = (screenProv.todaySummary?.appUsages ?? []).take(2).toList();
     final h = total.inHours;
     final m = total.inMinutes % 60;
-    final timeStr = h > 0 ? '${h}h ${m}m' : '${m}m';
+    // Without usage access (or before the first read) there is no real value to show.
+    final known = screenProv.hasPermission && screenProv.todaySummary != null;
+    final timeStr = !known ? '—' : (h > 0 ? '${h}h ${m}m' : '${m}m');
 
     return Card(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
@@ -861,7 +858,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w900, letterSpacing: -0.5),
                       ),
                       Text(
-                        'Total screen on time today',
+                        known ? 'Total screen on time today' : 'Usage access needed',
                         style: TextStyle(fontSize: 11, color: theme.colorScheme.onSurface.withValues(alpha: 0.6)),
                       ),
                     ],
@@ -997,11 +994,11 @@ class _CompactModuleTile extends StatelessWidget {
 // ─── Today's Progress + Insight Card ─────────────────────────────────────────
 
 class _TodayProgressCard extends StatelessWidget {
-  final EngineProvider engineProv;
+  final GrowEngine engine;
   final VoidCallback onAskAI;
 
   const _TodayProgressCard({
-    required this.engineProv,
+    required this.engine,
     required this.onAskAI,
   });
 
@@ -1009,8 +1006,8 @@ class _TodayProgressCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final progress = engineProv.todayProgress;
-    final insights = engineProv.insights;
+    final progress = engine.todayProgress;
+    final insights = engine.currentInsights;
 
     return Container(
       decoration: BoxDecoration(
@@ -1056,7 +1053,7 @@ class _TodayProgressCard extends StatelessWidget {
                   ),
                 ],
               ),
-              if (progress?.bestStreak != null && progress!.bestStreak > 0)
+              if (progress.bestStreak > 0)
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                   decoration: BoxDecoration(
@@ -1072,24 +1069,23 @@ class _TodayProgressCard extends StatelessWidget {
           ),
 
           // Stats Row
-          if (progress != null)
-            Row(
-              children: [
-                _StatChip(
-                  icon: '⚡',
-                  label: 'Habits',
-                  value: '${progress.habitsCompleted}/${progress.habitsTotal}',
-                  color: AppColors.primary,
-                ),
-                const SizedBox(width: 8),
-                _StatChip(
-                  icon: '📋',
-                  label: 'Tasks',
-                  value: '${progress.tasksCompletedToday} done',
-                  color: AppColors.tasks,
-                ),
-              ],
-            ),
+          Row(
+            children: [
+              _StatChip(
+                icon: '⚡',
+                label: 'Habits',
+                value: '${progress.habitsCompleted}/${progress.habitsTotal}',
+                color: AppColors.primary,
+              ),
+              const SizedBox(width: 8),
+              _StatChip(
+                icon: '📋',
+                label: 'Tasks',
+                value: '${progress.tasksCompletedToday} done',
+                color: AppColors.tasks,
+              ),
+            ],
+          ),
 
           // Top insight
           if (insights.isNotEmpty)

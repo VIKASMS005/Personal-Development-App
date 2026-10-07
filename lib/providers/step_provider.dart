@@ -1,4 +1,3 @@
-import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/step_record.dart';
@@ -106,20 +105,36 @@ class StepProvider extends ChangeNotifier {
     });
   }
 
+  /// Stored days with today's row replaced by the live count, so totals that
+  /// include today match what the today view and the notification show.
+  List<StepRecord> get _historyWithLiveToday {
+    final today = _todayRecord;
+    if (today == null) return _historyRecords;
+    return [
+      today,
+      ..._historyRecords.where((r) => r.date != today.date),
+    ];
+  }
+
+  /// True when a step count exists for [date] (today always counts once the
+  /// tracker has started). Days without a record are shown as "no data", not 0.
+  bool hasRecordFor(String date) =>
+      (_todayRecord != null && _todayRecord!.date == date) ||
+      _historyRecords.any((r) => r.date == date);
+
   /// Total lifetime steps
   int get lifetimeSteps =>
-      _historyRecords.fold(0, (sum, r) => sum + r.stepCount);
+      _historyWithLiveToday.fold(0, (sum, r) => sum + r.stepCount);
 
   /// Total lifetime kilometers
   double get lifetimeDistanceKm =>
-      _historyRecords.fold(0.0, (sum, r) => sum + r.distanceKm);
+      _historyWithLiveToday.fold(0.0, (sum, r) => sum + r.distanceKm);
 
   /// Best single-day step record
   int get bestSingleDaySteps {
-    if (_historyRecords.isEmpty) return 0;
-    return _historyRecords
-        .map((r) => r.stepCount)
-        .reduce((a, b) => a > b ? a : b);
+    final all = _historyWithLiveToday;
+    if (all.isEmpty) return 0;
+    return all.map((r) => r.stepCount).reduce((a, b) => a > b ? a : b);
   }
 
   /// Weekly average steps
@@ -233,15 +248,8 @@ class StepProvider extends ChangeNotifier {
           .copyWith(goal: _dailyGoal);
     }
 
-    await _seedSeptemberRecordsOnce(uid);
-    await _correctSeptember10RecordOnce(uid);
-    _historyRecords = await _db.getAllStepRecords(uid);
-    for (final record in _historyRecords) {
-      if (record.goal != _dailyGoal) {
-        await _db.updateStepGoal(uid, record.date, _dailyGoal);
-      }
-    }
-    _historyRecords = await _db.getAllStepRecords(uid);
+    // Every day is shown against the current goal (one statement, not one write per day).
+    await _db.applyStepGoalToAllDays(uid, _dailyGoal);
 
     // Attach tracker callbacks — the native value is the only step count shown.
     _tracker.onStepUpdate = (steps) async {
@@ -285,50 +293,18 @@ class StepProvider extends ChangeNotifier {
 
   /// Raise past days that the phone's health data shows as higher, then refresh history.
   Future<void> _syncHealthHistory(String uid, {bool force = false}) async {
-    final raised = await HealthHistoryService.instance
+    var raised = await HealthHistoryService.instance
         .syncNow(uid, goal: _dailyGoal, force: force);
+    // An older build wrote made-up counts for 7–10 Sep 2026; replace them with
+    // the phone's real history for those days, or remove them (runs once).
+    if (await HealthHistoryService.instance
+        .repairInventedSeptemberDays(uid, goal: _dailyGoal)) {
+      raised++;
+    }
     if (raised > 0) {
       _historyRecords = await _db.getAllStepRecords(uid);
       notifyListeners();
     }
-  }
-
-  Future<void> _seedSeptemberRecordsOnce(String uid) async {
-    final prefs = await SharedPreferences.getInstance();
-    final key = 'grow_seed_sep_2026_steps_v1_$uid';
-    if (prefs.getBool(key) == true) return;
-
-    final random = Random();
-    for (final day in [7, 8, 9, 10]) {
-      final date = '2026-09-${day.toString().padLeft(2, '0')}';
-      final existing = await _db.getStepRecord(uid, date);
-      final steps = 4000 + random.nextInt(2001);
-      await _db.upsertStepRecord(StepRecord(
-        id: existing?.id,
-        uid: uid,
-        date: date,
-        stepCount: steps,
-        goal: _dailyGoal,
-      ));
-    }
-    await prefs.setBool(key, true);
-  }
-
-  Future<void> _correctSeptember10RecordOnce(String uid) async {
-    final prefs = await SharedPreferences.getInstance();
-    final key = 'grow_correct_sep_10_2026_steps_v1_$uid';
-    if (prefs.getBool(key) == true) return;
-
-    const date = '2026-09-10';
-    final existing = await _db.getStepRecord(uid, date);
-    await _db.upsertStepRecord(StepRecord(
-      id: existing?.id,
-      uid: uid,
-      date: date,
-      stepCount: 5500,
-      goal: existing?.goal ?? _dailyGoal,
-    ));
-    await prefs.setBool(key, true);
   }
 
   /// Explicit on-demand refresh for pull-to-refresh.

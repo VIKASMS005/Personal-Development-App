@@ -777,8 +777,15 @@ class DatabaseService {
 
   Future<void> deleteReminder(String id) async {
     final db = await database;
-    await db.update('reminders', {'is_deleted': 1, 'is_synced': 0},
-        where: 'id = ?', whereArgs: [id]);
+    await db.update(
+        'reminders',
+        {
+          'is_deleted': 1,
+          'is_synced': 0,
+          'updated_at': DateTime.now().toIso8601String(),
+        },
+        where: 'id = ?',
+        whereArgs: [id]);
   }
 
   Future<List<Reminder>> getReminders(String uid) async {
@@ -1002,6 +1009,30 @@ class DatabaseService {
     }
   }
 
+  /// Sets every stored day's goal to [goal] in one statement.
+  Future<void> applyStepGoalToAllDays(String uid, int goal) async {
+    final db = await database;
+    await db.update('step_records', {'goal': goal},
+        where: 'uid = ? AND goal != ?', whereArgs: [uid, goal]);
+  }
+
+  /// Replaces a past day's count with [steps] exactly (may lower it). Only for
+  /// repairing a value known to be invented; normal syncing uses [raiseStepCount].
+  Future<void> setStepCountExactly(
+      String uid, String date, int steps, int goal) async {
+    final existing = await getStepRecord(uid, date);
+    final record = (existing ??
+            StepRecord(uid: uid, date: date, stepCount: 0, goal: goal))
+        .copyWith(stepCount: steps, updatedAt: DateTime.now());
+    await upsertStepRecord(record);
+  }
+
+  Future<void> deleteStepRecord(String uid, String date) async {
+    final db = await database;
+    await db.delete('step_records',
+        where: 'uid = ? AND date = ?', whereArgs: [uid, date]);
+  }
+
   /// Raise a day's step count to [steps] if it is higher than what is stored (inserting
   /// the row if missing). Never lowers a count. Used to fill past days from Health Connect.
   /// Returns true if the stored value changed.
@@ -1186,13 +1217,16 @@ class DatabaseService {
   }
 
   /// Imports and restores all user data from a parsed JSON backup map.
-  /// Uses REPLACE conflict algorithm so existing records are overwritten.
+  ///
+  /// A backup is usually older than what is on the phone, so it never moves a
+  /// record backwards: a row is only replaced when the backup's copy is at
+  /// least as new (updated_at), step counts and screen time per day only ever
+  /// go up, and everything else (sessions, alarms) is matched by id.
   Future<void> importAllData(
     Map<String, dynamic> data, {
     required String uid,
   }) async {
     final db = await database;
-    final batch = db.batch();
 
     const columns = <String, Set<String>>{
       'todos': {
@@ -1333,48 +1367,101 @@ class DatabaseService {
       },
     };
 
-    void batchInsert(String table, dynamic rows) {
-      if (rows is List) {
-        for (final row in rows) {
-          if (row is Map<String, dynamic>) {
-            final allowed = columns[table];
-            if (allowed == null) continue;
-            final sanitized = <String, dynamic>{
-              for (final entry in row.entries)
-                if (allowed.contains(entry.key)) entry.key: entry.value,
-            };
-            if (table == 'user_profiles') {
-              sanitized['uid'] = uid;
-            } else {
-              sanitized['uid'] = uid;
-            }
-            final hasIdentity = table == 'user_profiles'
-              ? sanitized['uid'] != null
-              : table == 'screen_time_records'
-                ? sanitized['uid'] != null && sanitized['date'] is String
-                : sanitized['id'] is String &&
-                    (sanitized['id'] as String).isNotEmpty;
-            if (!hasIdentity) continue;
-            batch.insert(table, sanitized,
-                conflictAlgorithm: ConflictAlgorithm.replace);
-          }
-        }
-      }
+    Map<String, dynamic>? sanitize(String table, dynamic row) {
+      if (row is! Map) return null;
+      final allowed = columns[table];
+      if (allowed == null) return null;
+      final sanitized = <String, dynamic>{
+        for (final entry in row.entries)
+          if (allowed.contains(entry.key)) entry.key.toString(): entry.value,
+      };
+      sanitized['uid'] = uid;
+      final hasIdentity = table == 'user_profiles'
+          ? true
+          : (table == 'screen_time_records' || table == 'step_records')
+              ? sanitized['date'] is String
+              : sanitized['id'] is String && (sanitized['id'] as String).isNotEmpty;
+      return hasIdentity ? sanitized : null;
     }
 
-    batchInsert('todos', data['todos']);
-    batchInsert('habits', data['habits']);
-    batchInsert('journal_entries', data['journal_entries']);
-    batchInsert('finance_transactions', data['finance_transactions']);
-    batchInsert('calendar_events', data['calendar_events']);
-    batchInsert('timetable_slots', data['timetable_slots']);
-    batchInsert('reminders', data['reminders']);
-    batchInsert('alarms', data['alarms']);
-    batchInsert('task_sessions', data['task_sessions']);
-    batchInsert('step_records', data['step_records']);
-    batchInsert('screen_time_records', data['screen_time_records']);
-    batchInsert('user_profiles', data['user_profiles']);
+    DateTime? updatedAt(Map<String, dynamic> row) =>
+        DateTime.tryParse('${row['updated_at'] ?? ''}');
 
-    await batch.commit(noResult: true);
+    await db.transaction((txn) async {
+      Future<void> importTable(String table, dynamic rows) async {
+        if (rows is! List) return;
+        for (final raw in rows) {
+          final row = sanitize(table, raw);
+          if (row == null) continue;
+
+          if (table == 'step_records') {
+            // Today's count belongs to the live native counter.
+            final n = DateTime.now();
+            final today =
+                '${n.year.toString().padLeft(4, '0')}-${n.month.toString().padLeft(2, '0')}-${n.day.toString().padLeft(2, '0')}';
+            if (row['date'] == today) continue;
+            final existing = await txn.query('step_records',
+                where: 'uid = ? AND date = ?', whereArgs: [uid, row['date']]);
+            final current = existing.isEmpty
+                ? -1
+                : existing
+                    .map((e) => (e['step_count'] as num?)?.toInt() ?? 0)
+                    .reduce((a, b) => a > b ? a : b);
+            final incoming = (row['step_count'] as num?)?.toInt() ?? 0;
+            if (incoming <= current) continue;
+            if (existing.isNotEmpty) {
+              await txn.update('step_records', {
+                'step_count': incoming,
+                'updated_at': DateTime.now().toIso8601String(),
+              }, where: 'uid = ? AND date = ?', whereArgs: [uid, row['date']]);
+            } else {
+              row['id'] = (row['id'] is String && (row['id'] as String).isNotEmpty)
+                  ? row['id']
+                  : '${uid}_${row['date']}';
+              await txn.insert('step_records', row,
+                  conflictAlgorithm: ConflictAlgorithm.ignore);
+            }
+            continue;
+          }
+
+          if (table == 'screen_time_records') {
+            final existing = await txn.query('screen_time_records',
+                where: 'uid = ? AND date = ?', whereArgs: [uid, row['date']]);
+            final current = existing.isEmpty
+                ? -1
+                : (existing.first['total_seconds'] as num?)?.toInt() ?? 0;
+            if (((row['total_seconds'] as num?)?.toInt() ?? 0) <= current) continue;
+            await txn.insert(table, row, conflictAlgorithm: ConflictAlgorithm.replace);
+            continue;
+          }
+
+          // Records with an edit time: keep whichever copy is newer.
+          if (columns[table]!.contains('updated_at')) {
+            final key = table == 'user_profiles' ? 'uid' : 'id';
+            final existing = await txn.query(table,
+                columns: ['updated_at'], where: '$key = ?', whereArgs: [row[key]]);
+            if (existing.isNotEmpty) {
+              final mine = updatedAt(existing.first);
+              final theirs = updatedAt(row);
+              if (mine != null && (theirs == null || theirs.isBefore(mine))) continue;
+            }
+          }
+          await txn.insert(table, row, conflictAlgorithm: ConflictAlgorithm.replace);
+        }
+      }
+
+      await importTable('todos', data['todos']);
+      await importTable('habits', data['habits']);
+      await importTable('journal_entries', data['journal_entries']);
+      await importTable('finance_transactions', data['finance_transactions']);
+      await importTable('calendar_events', data['calendar_events']);
+      await importTable('timetable_slots', data['timetable_slots']);
+      await importTable('reminders', data['reminders']);
+      await importTable('alarms', data['alarms']);
+      await importTable('task_sessions', data['task_sessions']);
+      await importTable('step_records', data['step_records']);
+      await importTable('screen_time_records', data['screen_time_records']);
+      await importTable('user_profiles', data['user_profiles']);
+    });
   }
 }

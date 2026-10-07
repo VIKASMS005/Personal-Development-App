@@ -1,4 +1,6 @@
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:grow_personal_dev/models/task_session.dart';
 import 'package:grow_personal_dev/models/todo.dart';
 import 'package:grow_personal_dev/providers/task_tracker_provider.dart';
@@ -273,10 +275,16 @@ void main() {
       expect(Todo.fromSqlite(done.toSqliteMap()).completedAt, done.completedAt);
     });
 
-    test('Goals are never timed', () {
+    testWidgets('Goals are never timed', (tester) async {
+      SharedPreferences.setMockInitialValues({});
       final goal = Todo(title: 'g', type: 'goal');
       final tracker = TaskTrackerProvider();
-      tracker.startTracking(goal);
+      late BuildContext ctx;
+      await tester.pumpWidget(Builder(builder: (c) {
+        ctx = c;
+        return const SizedBox();
+      }));
+      await tracker.startTracking(ctx, goal);
       expect(tracker.isTracking, isFalse);
       tracker.dispose();
     });

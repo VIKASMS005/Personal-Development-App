@@ -107,7 +107,7 @@ class _TaskReportScreenState extends State<TaskReportScreen> {
             ? 'Today, ${DateFormat('MMM d').format(_anchor)}'
             : DateFormat('EEE, MMM d, y').format(_anchor);
       case AnalyticsPeriod.weekly:
-        final last = range.end.subtract(const Duration(days: 1));
+        final last = DateTime(range.end.year, range.end.month, range.end.day - 1);
         final sameMonth = range.start.month == last.month;
         final span = sameMonth
             ? '${DateFormat('MMM d').format(range.start)}–${last.day}'

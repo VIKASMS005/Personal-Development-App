@@ -315,7 +315,7 @@ class TaskAnalytics {
           if (!start.isBefore(range.end)) break;
           var end = DateTime(range.start.year, range.start.month, startDay + 7);
           if (end.isAfter(range.end)) end = range.end;
-          final lastDay = end.subtract(const Duration(days: 1)).day;
+          final lastDay = DateTime(end.year, end.month, end.day - 1).day;
           buckets.add(bucket(startDay == lastDay ? '$startDay' : '$startDay–$lastDay', start, end,
               current: DateRange(start, end).contains(today)));
         }

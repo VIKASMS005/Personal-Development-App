@@ -31,6 +31,14 @@ class AlarmProvider extends ChangeNotifier {
     }
   }
 
+  /// Re-schedules every enabled alarm (e.g. after restoring a backup).
+  void rescheduleAll() {
+    for (final a in _alarms) {
+      _cancelAlarmNotifications(a.id);
+      if (a.isEnabled) _scheduleAlarmNotifications(a);
+    }
+  }
+
   Future<void> addAlarm(AlarmModel alarm) async {
     _alarms.add(alarm);
     _alarms.sort(

@@ -846,8 +846,14 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
 
     final weeks = _monthWeeks;
     final totalMonth = _monthTotal;
+    // Average over the days that have happened (the current month is not
+    // divided by days that are still to come).
+    final now = DateTime.now();
     final daysInMonth = DateUtils.getDaysInMonth(_selectedYear, _selectedMonth);
-    final dailyAvgSec = (totalMonth.inSeconds / daysInMonth).round();
+    final elapsedDays = (_selectedYear == now.year && _selectedMonth == now.month)
+        ? now.day
+        : daysInMonth;
+    final dailyAvgSec = (totalMonth.inSeconds / elapsedDays).round();
 
     final allSecs = weeks.map((w) => w.totalDuration.inSeconds.toDouble()).toList();
     final maxSec = allSecs.isEmpty ? 14400.0 : allSecs.reduce((a, b) => a > b ? a : b);

@@ -74,10 +74,12 @@ class _ReminderFormState extends State<ReminderForm> {
   }
 
   Future<void> _pickDate() async {
+    final earliest = DateTime.now().subtract(const Duration(days: 1));
     final picked = await showDatePicker(
       context: context,
-      initialDate: _selectedDate,
-      firstDate: DateTime.now().subtract(const Duration(days: 1)),
+      // Editing a reminder from long ago must not open outside the range.
+      initialDate: _selectedDate.isBefore(earliest) ? earliest : _selectedDate,
+      firstDate: earliest,
       lastDate: DateTime.now().add(const Duration(days: 365 * 2)),
     );
     if (picked != null) {

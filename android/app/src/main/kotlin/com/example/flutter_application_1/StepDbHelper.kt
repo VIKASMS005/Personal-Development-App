@@ -98,8 +98,10 @@ object StepDbHelper {
                     put("step_count", effectiveSteps)
                     put("goal", goal)
                     put("calories", effectiveSteps * 0.04)
-                    put("distance_km", effectiveSteps * 0.00075)
-                    put("active_minutes", (effectiveSteps / 100).toInt())
+                    // Same formulas as the notification and the app (StepRecord):
+                    // 0.762 m per step, 100 steps per active minute (rounded).
+                    put("distance_km", effectiveSteps * 0.762 / 1000.0)
+                    put("active_minutes", Math.round(effectiveSteps / 100.0).toInt())
                     put("updated_at", nowIso)
                 }
 

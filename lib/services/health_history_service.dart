@@ -87,6 +87,67 @@ class HealthHistoryService {
     }
   }
 
+  static const _inventedDaysRepairedKey = 'grow_repair_invented_sep_2026_steps_v1';
+
+  /// An earlier build wrote random counts (4,000–6,000) for 7–9 Sep 2026 and a
+  /// fixed 5,500 for 10 Sep 2026, over whatever was stored. Those values are not
+  /// the user's activity. This replaces each of those days with the phone's own
+  /// Health Connect total when it has one, and otherwise deletes the row so the
+  /// day shows no data. Runs once. Returns true if anything changed.
+  Future<bool> repairInventedSeptemberDays(String uid, {required int goal}) async {
+    final prefs = await SharedPreferences.getInstance();
+    final key = '${_inventedDaysRepairedKey}_$uid';
+    if (prefs.getBool(key) == true) return false;
+    // Only users who ran the build that wrote them have these rows.
+    if (prefs.getBool('grow_seed_sep_2026_steps_v1_$uid') != true &&
+        prefs.getBool('grow_correct_sep_10_2026_steps_v1_$uid') != true) {
+      await prefs.setBool(key, true);
+      return false;
+    }
+
+    // Read the real totals first; if Health Connect fails mid-way, try again next launch.
+    final real = <String, int>{};
+    var canRead = false;
+    if (!kIsWeb && Platform.isAndroid) {
+      try {
+        if (!_configured) {
+          await _health.configure();
+          _configured = true;
+        }
+        canRead = await _health.isHealthConnectAvailable() &&
+            (await _health.hasPermissions(_types, permissions: _access) ?? false);
+      } catch (e) {
+        debugPrint('[HealthHistory] repair: availability check failed: $e');
+        return false;
+      }
+    }
+    for (final day in [7, 8, 9, 10]) {
+      final start = DateTime(2026, 9, day);
+      final end = DateTime(2026, 9, day + 1);
+      if (!canRead) continue;
+      try {
+        final steps = await _health.getTotalStepsInInterval(start, end);
+        if (steps != null && steps > 0) real[_dateStr(start)] = steps;
+      } catch (e) {
+        debugPrint('[HealthHistory] repair: read failed for ${_dateStr(start)}: $e');
+        return false;
+      }
+    }
+
+    final db = DatabaseService.instance;
+    for (final day in [7, 8, 9, 10]) {
+      final date = _dateStr(DateTime(2026, 9, day));
+      final steps = real[date];
+      if (steps != null) {
+        await db.setStepCountExactly(uid, date, steps, goal);
+      } else {
+        await db.deleteStepRecord(uid, date);
+      }
+    }
+    await prefs.setBool(key, true);
+    return true;
+  }
+
   Future<int> _backfill(String uid, int goal) async {
     final db = DatabaseService.instance;
     final now = DateTime.now();

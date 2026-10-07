@@ -22,6 +22,18 @@ class HabitProvider extends ChangeNotifier {
       return h.copyWith(streak: accurateStreak);
     }).toList();
     notifyListeners();
+    // Keep each habit's daily warning in line with today's real state
+    // (also re-arms warnings an older build switched off).
+    final today = _getTodayStr();
+    for (final h in _habits) {
+      try {
+        await NotificationService.scheduleHabitStreakWarning(
+          id: NotificationService.stableId(h.id),
+          habitTitle: h.title,
+          doneToday: h.history[today] == true,
+        );
+      } catch (_) {}
+    }
   }
 
   Future<void> addHabit(Habit habit) async {
@@ -44,6 +56,12 @@ class HabitProvider extends ChangeNotifier {
       _habits[idx] = updated;
       notifyListeners();
       await _db.upsertHabit(updated);
+      // The warning text carries the title, so a rename re-schedules it.
+      await NotificationService.scheduleHabitStreakWarning(
+        id: NotificationService.stableId(updated.id),
+        habitTitle: updated.title,
+        doneToday: updated.history[_getTodayStr()] == true,
+      );
     }
   }
 
@@ -58,16 +76,14 @@ class HabitProvider extends ChangeNotifier {
     // Toggling a past date must never cancel or reschedule future streak reminders.
     final todayStr = _getTodayStr();
     if (dateStr == todayStr) {
-      if (!wasDone) {
-        // Completed today — cancel today's streak warning
-        await NotificationService.cancel(NotificationService.stableId(habit.id));
-      } else {
-        // Uncompleted today — reschedule streak warning
-        await NotificationService.scheduleHabitStreakWarning(
-          id: NotificationService.stableId(habit.id),
-          habitTitle: habit.title,
-        );
-      }
+      // Completed today: the next warning is tomorrow's. (Cancelling it, as
+      // before, switched the daily warning off for good after one completion.)
+      // Un-completed today: warn again tonight.
+      await NotificationService.scheduleHabitStreakWarning(
+        id: NotificationService.stableId(habit.id),
+        habitTitle: habit.title,
+        doneToday: !wasDone,
+      );
     }
 
     final updated = habit.copyWith(

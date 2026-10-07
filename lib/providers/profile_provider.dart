@@ -3,6 +3,10 @@ import '../models/user_profile.dart';
 import '../services/database_service.dart';
 
 class ProfileProvider extends ChangeNotifier {
+  static const _oldDefaultEmail = 'user@grow.local';
+  static const _oldDefaultName = 'Grow Champion';
+  static const _oldDefaultBio = 'Self-discipline and continuous personal growth.';
+
   final DatabaseService _db = DatabaseService.instance;
   UserProfile? _profile;
 
@@ -16,11 +20,24 @@ class ProfileProvider extends ChangeNotifier {
   Future<void> loadProfile(String uid, {String? email, String? displayName}) async {
     var p = await _db.getProfile(uid);
     if (p == null) {
+      // A new profile starts empty. Made-up values ("Grow Champion",
+      // user@grow.local, a stock bio) used to be saved as if the user had
+      // entered them, and were shown and given to the AI as real details.
       p = UserProfile(
         uid: uid,
-        email: email ?? 'user@grow.local',
-        name: displayName ?? 'Grow Champion',
-        bio: 'Self-discipline and continuous personal growth.',
+        email: email ?? '',
+        name: displayName ?? '',
+        bio: '',
+      );
+      await _db.saveProfile(p);
+    } else if (p.email == _oldDefaultEmail ||
+        p.name == _oldDefaultName ||
+        p.bio == _oldDefaultBio) {
+      // Clear those old stand-ins wherever the user never replaced them.
+      p = p.copyWith(
+        email: p.email == _oldDefaultEmail ? '' : p.email,
+        name: p.name == _oldDefaultName ? '' : p.name,
+        bio: p.bio == _oldDefaultBio ? '' : p.bio,
       );
       await _db.saveProfile(p);
     }

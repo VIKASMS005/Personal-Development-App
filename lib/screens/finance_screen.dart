@@ -57,7 +57,7 @@ class _FinanceScreenState extends State<FinanceScreen> {
     setState(() {
       switch (_selectedPeriod) {
         case FinancePeriod.daily:
-          _selectedDate = _selectedDate.subtract(const Duration(days: 1));
+          _selectedDate = DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day - 1);
           break;
         case FinancePeriod.weekly:
           _selectedDate = previousMonthWeek(monthWeekOf(_selectedDate)).start;
@@ -74,25 +74,33 @@ class _FinanceScreenState extends State<FinanceScreen> {
     });
   }
 
+  /// Start of the period after the selected one.
+  DateTime? _nextPeriodStart() {
+    switch (_selectedPeriod) {
+      case FinancePeriod.daily:
+        return DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day + 1);
+      case FinancePeriod.weekly:
+        return monthWeekOf(_selectedDate).end;
+      case FinancePeriod.monthly:
+        return DateTime(_selectedDate.year, _selectedDate.month + 1, 1);
+      case FinancePeriod.yearly:
+        return DateTime(_selectedDate.year + 1, 1, 1);
+      case FinancePeriod.all:
+        return null;
+    }
+  }
+
+  /// Periods that start after today have no transactions yet, so they can't be opened.
+  bool get _canGoNext {
+    final next = _nextPeriodStart();
+    if (next == null) return false;
+    final now = DateTime.now();
+    return !next.isAfter(DateTime(now.year, now.month, now.day));
+  }
+
   void _nextPeriod() {
-    setState(() {
-      switch (_selectedPeriod) {
-        case FinancePeriod.daily:
-          _selectedDate = _selectedDate.add(const Duration(days: 1));
-          break;
-        case FinancePeriod.weekly:
-          _selectedDate = monthWeekOf(_selectedDate).end;
-          break;
-        case FinancePeriod.monthly:
-          _selectedDate = DateTime(_selectedDate.year, _selectedDate.month + 1, 1);
-          break;
-        case FinancePeriod.yearly:
-          _selectedDate = DateTime(_selectedDate.year + 1, 1, 1);
-          break;
-        case FinancePeriod.all:
-          break;
-      }
-    });
+    if (!_canGoNext) return;
+    setState(() => _selectedDate = _nextPeriodStart()!);
   }
 
   Future<void> _pickCustomDate() async {
@@ -110,9 +118,10 @@ class _FinanceScreenState extends State<FinanceScreen> {
               width: 300,
               height: 300,
               child: ListView.builder(
-                itemCount: 15,
+                // Up to the current year: future years have no transactions.
+                itemCount: 11,
                 itemBuilder: (_, i) {
-                  final year = currentYear - 5 + i;
+                  final year = currentYear - 10 + i;
                   final isSel = year == _selectedDate.year;
                   return ListTile(
                     title: Text('$year', style: TextStyle(fontWeight: isSel ? FontWeight.w800 : FontWeight.normal)),
@@ -131,11 +140,12 @@ class _FinanceScreenState extends State<FinanceScreen> {
       return;
     }
 
+    final now = DateTime.now();
     final picked = await showDatePicker(
       context: context,
-      initialDate: _selectedDate,
+      initialDate: _selectedDate.isAfter(now) ? now : _selectedDate,
       firstDate: DateTime(2020),
-      lastDate: DateTime(2035),
+      lastDate: now,
     );
 
     if (picked != null) {
@@ -287,7 +297,7 @@ class _FinanceScreenState extends State<FinanceScreen> {
                           IconButton(
                             icon: const Icon(Icons.chevron_right_rounded),
                             tooltip: 'Next',
-                            onPressed: _nextPeriod,
+                            onPressed: _canGoNext ? _nextPeriod : null,
                           ),
                         ],
                       ),

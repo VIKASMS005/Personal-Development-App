@@ -12,6 +12,10 @@ class TodoProvider extends ChangeNotifier {
   List<TaskSession> _sessions = [];
 
   List<Todo> get todos => _todos;
+
+  /// Called after a task's reminder row was added, changed or removed, so the
+  /// reminders list (and the in-app reminder ringer) doesn't keep a stale copy.
+  void Function()? onRemindersChanged;
   List<TaskSession> get sessions => _sessions;
 
   // ── Tasks vs Goals Split ──────────────────────────────────────────────────
@@ -74,6 +78,7 @@ class TodoProvider extends ChangeNotifier {
             ? todo.description
             : 'Time to complete your scheduled task!',
       );
+      onRemindersChanged?.call();
     }
   }
 
@@ -125,6 +130,7 @@ class TodoProvider extends ChangeNotifier {
         await NotificationService.cancel(
             NotificationService.stableId('task_${todo.id}'));
       }
+      onRemindersChanged?.call();
     }
   }
 
@@ -156,6 +162,7 @@ class TodoProvider extends ChangeNotifier {
           isCompleted: updated.completed,
         );
         await _db.insertReminder(taskReminder);
+        onRemindersChanged?.call();
       }
 
       if (updated.completed) {
@@ -175,12 +182,22 @@ class TodoProvider extends ChangeNotifier {
     }
   }
 
+  /// Takes a task that another part of the app already saved (e.g. edited
+  /// through its reminder), so this list doesn't keep a stale copy.
+  void applySavedTodo(Todo saved) {
+    final idx = _todos.indexWhere((t) => t.id == saved.id);
+    if (idx == -1) return;
+    _todos[idx] = saved;
+    notifyListeners();
+  }
+
   Future<void> deleteTodo(String id) async {
     _todos.removeWhere((t) => t.id == id);
     notifyListeners();
     await NotificationService.cancel(NotificationService.stableId('task_$id'));
     await _db.deleteReminder('task_$id');
     await _db.softDeleteTodo(id);
+    onRemindersChanged?.call();
   }
 
   /// Adds freshly saved timer sessions and their time to the task total.

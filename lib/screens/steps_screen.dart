@@ -228,16 +228,10 @@ class _StepsScreenState extends State<StepsScreen> {
                   onRefresh: () async {
                     try {
                       final uid = auth.uid ?? 'local_user';
-                      final isToday = _normalizeDate(_selectedDate) == _normalizeDate(DateTime.now());
 
-                      if (_selectedPeriod == 0 && isToday) {
-                        // On today: force hardware sensor flush, baseline difference recalculation, and SQLite update
-                        await stepProv.refreshStepData(uid);
-                      } else {
-                        // Historical date, week, month, year, or all-time: reload SQLite database records
-                        // Note: _selectedDate, _selectedMonth, _selectedYear are strictly preserved!
-                        await stepProv.loadStepData(uid);
-                      }
+                      // Re-reads the live count and every stored day. (loadStepData
+                      // would restart the tracker and rewrite goals on every pull.)
+                      await stepProv.refreshStepData(uid);
                     } catch (e) {
                       debugPrint('[StepsScreen] Refresh error: $e');
                     }
@@ -440,6 +434,8 @@ class _StepsScreenState extends State<StepsScreen> {
     final steps = record.stepCount;
     final goal = record.goal;
     final progress = goal > 0 ? (steps / goal).clamp(0.0, 1.0) : 0.0;
+    // A past day with nothing stored is "no data", not a walked 0.
+    final hasData = isToday || stepProv.hasRecordFor(dateStr);
     final cal = record.calories;
     final km = record.distanceKm;
     final mins = record.activeMinutes;
@@ -493,7 +489,7 @@ class _StepsScreenState extends State<StepsScreen> {
                         const Icon(Icons.directions_walk_rounded, color: AppColors.primary, size: 28),
                         const SizedBox(height: 4),
                         Text(
-                          NumberFormat('#,###').format(steps),
+                          hasData ? NumberFormat('#,###').format(steps) : 'No data',
                           style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w900, letterSpacing: -1),
                         ),
                         Text(
@@ -512,7 +508,7 @@ class _StepsScreenState extends State<StepsScreen> {
                             borderRadius: BorderRadius.circular(10),
                           ),
                           child: Text(
-                            '${(progress * 100).toInt()}% Goal Reached',
+                            hasData ? '${(progress * 100).toInt()}% Goal Reached' : 'Nothing recorded this day',
                             style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: AppColors.primary),
                           ),
                         ),
@@ -529,9 +525,9 @@ class _StepsScreenState extends State<StepsScreen> {
                     child: _MetricItem(
                     icon: Icons.local_fire_department_rounded,
                     color: Colors.orange,
-                    value: cal.toStringAsFixed(1),
+                    value: hasData ? cal.toStringAsFixed(1) : '—',
                     unit: 'kcal',
-                    label: 'Burned',
+                    label: 'Est. burned',
                     ),
                   ),
                   Container(height: 36, width: 1, color: Colors.black12),
@@ -539,9 +535,9 @@ class _StepsScreenState extends State<StepsScreen> {
                     child: _MetricItem(
                     icon: Icons.place_rounded,
                     color: AppColors.secondary,
-                    value: km.toStringAsFixed(2),
+                    value: hasData ? km.toStringAsFixed(2) : '—',
                     unit: 'km',
-                    label: 'Distance',
+                    label: 'Est. distance',
                     ),
                   ),
                   Container(height: 36, width: 1, color: Colors.black12),
@@ -549,9 +545,9 @@ class _StepsScreenState extends State<StepsScreen> {
                     child: _MetricItem(
                     icon: Icons.timer_outlined,
                     color: Colors.purple,
-                    value: '$mins',
+                    value: hasData ? '$mins' : '—',
                     unit: 'mins',
-                    label: 'Active',
+                    label: 'Est. active',
                     ),
                   ),
                 ],
@@ -769,8 +765,10 @@ class _StepsScreenState extends State<StepsScreen> {
                     final isFuture = _normalizeDate(dayDate).isAfter(today);
                     final record = weekRecords[i];
                     final steps = record.stepCount;
-                    final isGoalMet = record.isGoalReached;
-                    final barFactor = isFuture
+                    // A day with no stored count shows "—" and no bar, not a made-up 0.
+                    final hasData = stepProv.hasRecordFor(record.date);
+                    final isGoalMet = hasData && record.isGoalReached;
+                    final barFactor = isFuture || !hasData || steps == 0
                         ? 0.0
                         : (steps / effectiveChartMax).clamp(0.04, 1.0);
 
@@ -778,7 +776,7 @@ class _StepsScreenState extends State<StepsScreen> {
                     final dateNum = '${dayDate.day}';
 
                     String stepLabel = '—';
-                    if (!isFuture) {
+                    if (!isFuture && hasData) {
                       if (steps >= 1000) {
                         stepLabel = '${(steps / 1000).toStringAsFixed(1)}k';
                       } else {
@@ -1030,14 +1028,16 @@ class _StepsScreenState extends State<StepsScreen> {
                     subtitle: Text(
                       isFuture
                           ? 'Upcoming'
-                          : '${r.distanceKm.toStringAsFixed(2)} km · ${r.calories.toStringAsFixed(0)} kcal',
+                          : !stepProv.hasRecordFor(r.date)
+                              ? 'No step data recorded'
+                              : '${r.distanceKm.toStringAsFixed(2)} km · ${r.calories.toStringAsFixed(0)} kcal',
                       style: TextStyle(
                         fontSize: 12,
                         color: isFuture ? theme.colorScheme.onSurface.withValues(alpha: 0.4) : null,
                       ),
                     ),
                     trailing: Text(
-                      isFuture ? '—' : '${NumberFormat('#,###').format(r.stepCount)} steps',
+                      isFuture || !stepProv.hasRecordFor(r.date) ? '—' : '${NumberFormat('#,###').format(r.stepCount)} steps',
                       style: TextStyle(
                         fontWeight: FontWeight.w800,
                         fontSize: 14,
@@ -1090,7 +1090,13 @@ class _StepsScreenState extends State<StepsScreen> {
       ..sort((a, b) => b.date.compareTo(a.date));
 
     final totalSteps = monthRecords.fold(0, (sum, r) => sum + r.stepCount);
-    final daysInMonth = DateTime(_selectedYear, _selectedMonth + 1, 0).day;
+    // Average over the days that have happened: the current month is not
+    // divided by days that are still to come.
+    final now = DateTime.now();
+    final isCurrentMonth = _selectedYear == now.year && _selectedMonth == now.month;
+    final daysInMonth = isCurrentMonth
+        ? now.day
+        : DateTime(_selectedYear, _selectedMonth + 1, 0).day;
     final avgSteps = daysInMonth > 0 ? (totalSteps / daysInMonth).round() : 0;
     final goalsReached = monthRecords.where((r) => r.isGoalReached).length;
     final totalKm = monthRecords.fold(0.0, (sum, r) => sum + r.distanceKm);
@@ -1292,7 +1298,9 @@ class _StepsScreenState extends State<StepsScreen> {
               ),
               const SizedBox(height: 4),
               Text(
-                '🏆 Highest Active Month: $bestMonthName (${NumberFormat('#,###').format(bestMonthVal)} steps)',
+                bestMonthVal > 0
+                    ? '🏆 Highest Active Month: $bestMonthName (${NumberFormat('#,###').format(bestMonthVal)} steps)'
+                    : 'No step data recorded in $_selectedYear',
                 style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.amberAccent),
               ),
             ],
@@ -1324,7 +1332,7 @@ class _StepsScreenState extends State<StepsScreen> {
                   children: List.generate(12, (m) {
                     final monthName = DateFormat('MMM').format(DateTime(_selectedYear, m + 1));
                     final val = monthlyTotals[m];
-                    final factor = (val / maxMonthSteps).clamp(0.04, 1.0);
+                    final factor = val == 0 ? 0.0 : (val / maxMonthSteps).clamp(0.04, 1.0);
                     final isBest = m == bestMonthIdx && val > 0;
 
                     return Column(

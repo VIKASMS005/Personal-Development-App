@@ -163,12 +163,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (success) {
       // Reload all providers
       final uid = auth.uid ?? 'local_user';
+      // Every restored table is reloaded (steps, profile, calendar and the
+      // timetable were left showing pre-restore data before).
+      final reminders = context.read<ReminderProvider>();
+      final alarms = context.read<AlarmProvider>();
+      context.read<ProfileProvider>().loadProfile(uid);
       context.read<TodoProvider>().loadTodos(uid);
       context.read<HabitProvider>().loadHabits(uid);
       context.read<JournalProvider>().loadJournals(uid);
       context.read<FinanceProvider>().loadTransactions(uid);
-      context.read<ReminderProvider>().loadReminders(uid);
-      context.read<AlarmProvider>().loadAlarms(uid);
+      context.read<CalendarProvider>().loadEvents(uid);
+      context.read<TimetableProvider>().loadSlots(uid);
+      context.read<StepProvider>().refreshStepData(uid);
+      // Restored reminders and alarms also need their notifications.
+      reminders.loadReminders(uid).then((_) => reminders.rescheduleUpcoming());
+      alarms.loadAlarms(uid).then((_) => alarms.rescheduleAll());
       AppSnack.show(context, 'Data restored', tone: StatusTone.success);
     } else {
       AppSnack.show(context, 'Nothing was restored. The file was cancelled or couldn\'t be read.',

@@ -184,11 +184,14 @@ class _FinanceFormState extends State<FinanceForm> {
               icon: const Icon(Icons.calendar_today_rounded, size: 18),
               label: Text('Date: ${_date.toLocal().toString().split(' ')[0]}'),
               onPressed: () async {
+                // A transaction records money already spent or received, so
+                // it can't be dated in the future.
+                final now = DateTime.now();
                 final d = await showDatePicker(
                   context: context,
-                  initialDate: _date,
+                  initialDate: _date.isAfter(now) ? now : _date,
                   firstDate: DateTime(2020),
-                  lastDate: DateTime.now().add(const Duration(days: 365)),
+                  lastDate: now,
                 );
                 if (d != null) setState(() => _date = d);
               },

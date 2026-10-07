@@ -654,7 +654,7 @@ class _TodosScreenState extends State<TodosScreen>
                                                       if (isTracking) {
                                                         tracker.finish(context);
                                                       } else {
-                                                        tracker.startTracking(t);
+                                                        tracker.startTracking(context, t);
                                                       }
                                                     },
                                                   );

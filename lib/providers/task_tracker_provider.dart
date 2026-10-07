@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/todo.dart';
 import '../models/task_session.dart';
 import '../services/database_service.dart';
@@ -58,10 +60,17 @@ List<TaskSession> buildDailySessions({
 /// Allows the user to track task time accurately across all screens
 /// and in the background.
 ///
-/// The running/paused timer lives only here. It becomes history (saved
+/// The running/paused timer lives here and is mirrored to SharedPreferences,
+/// so it survives the app being closed or killed. It becomes history (saved
 /// [TaskSession]s with real timestamps) when the user ends it.
 class TaskTrackerProvider extends ChangeNotifier {
   final DatabaseService _db = DatabaseService.instance;
+
+  static const _prefsKey = 'grow_active_task_timer_v1';
+
+  TaskTrackerProvider() {
+    _restore();
+  }
 
   /// Sessions shorter than this are treated as accidental taps.
   static const minSessionSeconds = 5;
@@ -109,11 +118,12 @@ class TaskTrackerProvider extends ChangeNotifier {
   }
 
   /// Starts timing [todo]. Goals are not timed, so they are ignored.
-  void startTracking(Todo todo) {
+  /// A timer already running on another task is ended and saved first, so
+  /// switching tasks never throws away tracked time.
+  Future<void> startTracking(BuildContext context, Todo todo) async {
     if (todo.isGoal) return;
     if (_isTracking) {
-      // If already tracking another task, stop previous and start new
-      cancel();
+      await finish(context);
     }
     _activeTodo = todo;
     _isTracking = true;
@@ -123,6 +133,7 @@ class TaskTrackerProvider extends ChangeNotifier {
     _runningSince = DateTime.now();
 
     _startTicker();
+    _persist();
     notifyListeners();
   }
 
@@ -134,6 +145,7 @@ class TaskTrackerProvider extends ChangeNotifier {
     _pausedAt = now;
     _isPaused = true;
     _tickerTimer?.cancel();
+    _persist();
     notifyListeners();
   }
 
@@ -143,6 +155,7 @@ class TaskTrackerProvider extends ChangeNotifier {
     _pausedAt = null;
     _runningSince = DateTime.now();
     _startTicker();
+    _persist();
     notifyListeners();
   }
 
@@ -163,8 +176,11 @@ class TaskTrackerProvider extends ChangeNotifier {
       ..._segments,
       if (_runningSince != null) TimerSegment(_runningSince!, now),
     ];
-    final todo = _activeTodo!;
     final todoProvider = context.read<TodoProvider>();
+    // Use the task as it is now (it may have been renamed while the timer ran).
+    final active = _activeTodo!;
+    final todo = todoProvider.todos
+        .firstWhere((t) => t.id == active.id, orElse: () => active);
 
     _reset();
 
@@ -189,7 +205,70 @@ class TaskTrackerProvider extends ChangeNotifier {
     _segments.clear();
     _runningSince = null;
     _pausedAt = null;
+    _persist();
     notifyListeners();
+  }
+
+  // ── Persistence ─────────────────────────────────────────────────────────────
+
+  Future<void> _persist() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final todo = _activeTodo;
+      if (!_isTracking || todo == null) {
+        await prefs.remove(_prefsKey);
+        return;
+      }
+      await prefs.setString(
+          _prefsKey,
+          jsonEncode({
+            'todo': todo.toMap(),
+            'segments': [
+              for (final s in _segments)
+                [s.start.toIso8601String(), s.end.toIso8601String()]
+            ],
+            'runningSince': _runningSince?.toIso8601String(),
+            'pausedAt': _pausedAt?.toIso8601String(),
+          }));
+    } catch (e) {
+      debugPrint('[TaskTracker] could not save timer state: $e');
+    }
+  }
+
+  /// Brings back a timer that was running or paused when the app was closed.
+  Future<void> _restore() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_prefsKey);
+      if (raw == null || _isTracking) return;
+      final m = jsonDecode(raw) as Map<String, dynamic>;
+      final todo = Todo.fromMap(Map<String, dynamic>.from(m['todo'] as Map));
+      final segments = <TimerSegment>[];
+      for (final s in (m['segments'] as List? ?? const [])) {
+        final start = DateTime.tryParse('${s[0]}');
+        final end = DateTime.tryParse('${s[1]}');
+        if (start != null && end != null && end.isAfter(start)) {
+          segments.add(TimerSegment(start, end));
+        }
+      }
+      final runningSince = DateTime.tryParse('${m['runningSince']}');
+      if (segments.isEmpty && runningSince == null) {
+        await prefs.remove(_prefsKey);
+        return;
+      }
+      _activeTodo = todo;
+      _isTracking = true;
+      _segments
+        ..clear()
+        ..addAll(segments);
+      _runningSince = runningSince;
+      _isPaused = runningSince == null;
+      _pausedAt = _isPaused ? DateTime.tryParse('${m['pausedAt']}') : null;
+      if (!_isPaused) _startTicker();
+      notifyListeners();
+    } catch (e) {
+      debugPrint('[TaskTracker] could not restore timer state: $e');
+    }
   }
 
   void _startTicker() {

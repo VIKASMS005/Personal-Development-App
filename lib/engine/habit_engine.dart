@@ -28,7 +28,7 @@ class HabitEngine {
     final now = DateTime.now();
     int count = 0;
     for (int i = 0; i < lookbackDays; i++) {
-      final d = now.subtract(Duration(days: i));
+      final d = DateTime(now.year, now.month, now.day - i);
       if (h.history[_dateStr(d)] == true) count++;
     }
     return count;
@@ -42,7 +42,7 @@ class HabitEngine {
     if (daysElapsed == 0) return 0.0;
     int done = 0;
     for (int i = 0; i < daysElapsed; i++) {
-      final d = weekStart.add(Duration(days: i));
+      final d = DateTime(weekStart.year, weekStart.month, weekStart.day + i);
       if (h.history[_dateStr(d)] == true) done++;
     }
     return done / daysElapsed;
@@ -128,8 +128,8 @@ class HabitEngine {
   List<Habit> habitsAtRisk() {
     return habits.where((h) {
       final today = _dateStr(DateTime.now());
-      final yesterday =
-          _dateStr(DateTime.now().subtract(const Duration(days: 1)));
+      final n = DateTime.now();
+      final yesterday = _dateStr(DateTime(n.year, n.month, n.day - 1));
       final doneToday = h.history[today] == true;
       final doneYesterday = h.history[yesterday] == true;
       return !doneToday && !doneYesterday;

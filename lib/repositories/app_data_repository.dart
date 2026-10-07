@@ -113,7 +113,9 @@ class AppDataRepository {
       'thisWeekDailyAverage': '${p.weeklyDailyAverageHours.toStringAsFixed(1)}h/day',
       'lastWeekTotal': _formatDuration(p.lastWeekTotalDuration),
       'lastWeekMinutes': p.lastWeekTotalDuration.inMinutes,
-      'weekOverWeekPercentChange': '${p.weeklyPercentChange >= 0 ? "+" : ""}${p.weeklyPercentChange.toStringAsFixed(1)}%',
+      'weekOverWeekPercentChange': p.weeklyPercentChange == null
+          ? 'no usage last week to compare with'
+          : '${p.weeklyPercentChange! >= 0 ? "+" : ""}${p.weeklyPercentChange!.toStringAsFixed(1)}% (same days of each week)',
       'topAppsThisWeek': topWeeklyApps.take(7).map((e) => {
         'app': e.key,
         'minutes': e.value,

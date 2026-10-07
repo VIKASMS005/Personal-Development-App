@@ -128,7 +128,8 @@ class _TodoFormState extends State<TodoForm> {
 
     final isGoal = widget.initial != null
         ? widget.initial!.isGoal
-        : (_due != null && _due!.difference(DateTime.now()).inDays > 7);
+        // Same rule that will classify it on save.
+        : Todo.classify(dueDate: _due, createdAt: DateTime.now()) == 'goal';
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
@@ -248,10 +249,14 @@ class _TodoFormState extends State<TodoForm> {
                 Expanded(
                   child: InkWell(
                     onTap: () async {
+                      // The range must contain the current due date, or the
+                      // picker fails when editing a task due long ago.
+                      final earliest = DateTime.now().subtract(const Duration(days: 30));
+                      final first = _due != null && _due!.isBefore(earliest) ? _due! : earliest;
                       final d = await showDatePicker(
                         context: context,
                         initialDate: _due ?? DateTime.now(),
-                        firstDate: DateTime.now().subtract(const Duration(days: 30)),
+                        firstDate: first,
                         lastDate: DateTime.now().add(const Duration(days: 3650)),
                       );
                       if (d != null) {
@@ -432,10 +437,13 @@ class _TodoFormState extends State<TodoForm> {
                   Expanded(
                     child: InkWell(
                       onTap: () async {
+                        final now = DateTime.now();
+                        final r = _reminderDate ?? now;
                         final d = await showDatePicker(
                           context: context,
-                          initialDate: _reminderDate ?? DateTime.now(),
-                          firstDate: DateTime.now(),
+                          // A reminder that already passed opens on today.
+                          initialDate: r.isBefore(DateTime(now.year, now.month, now.day)) ? now : r,
+                          firstDate: DateTime(now.year, now.month, now.day),
                           lastDate: DateTime.now().add(const Duration(days: 365)),
                         );
                         if (d != null) setState(() => _reminderDate = d);

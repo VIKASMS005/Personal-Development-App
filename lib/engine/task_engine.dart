@@ -1,4 +1,5 @@
 import '../models/todo.dart';
+import '../services/task_analytics.dart';
 import '../utils/month_weeks.dart';
 
 /// Pure computation engine for Task/Todo analytics.
@@ -13,7 +14,8 @@ class TaskEngine {
 
   TaskEngine(this.todos);
 
-  static String _dateStr(DateTime d) => d.toIso8601String().split('T')[0];
+  // Local calendar day (a UTC timestamp would otherwise give the UTC date).
+  static String _dateStr(DateTime d) => d.toLocal().toIso8601String().split('T')[0];
 
 
   // ─── Basic Counts ──────────────────────────────────────────────────────────
@@ -21,7 +23,9 @@ class TaskEngine {
 
   int get totalCount => _tasks.length;
   int get completedCount => _tasks.where((t) => t.completed).length;
-  int get pendingCount => _tasks.where((t) => !t.completed).length;
+  /// Not completed and not missed, so completed + pending + missed = total.
+  int get pendingCount => _tasks.where((t) => !t.completed && !t.isMissed).length;
+  int get missedCount => _tasks.where((t) => t.isMissed).length;
 
   double get completionPercentage {
     if (totalCount == 0) return 0.0;
@@ -34,11 +38,8 @@ class TaskEngine {
     final now = DateTime.now();
     return _tasks.where((t) {
       if (t.completed) return false;
-      if (t.dueDate != null && t.dueDate!.isBefore(now)) return true;
-      if (t.reminderDateTime != null && t.reminderDateTime!.isBefore(now)) {
-        return true;
-      }
-      return false;
+      // Only the deadline makes a task overdue; a reminder time passing does not.
+      return t.dueDate != null && t.dueDate!.isBefore(now);
     }).toList();
   }
 
@@ -46,8 +47,10 @@ class TaskEngine {
 
   List<Todo> completedOn(DateTime date) {
     final ds = _dateStr(date);
+    // The completion time, not the last edit: editing or timing a task completed
+    // on an earlier day must not make it count as completed again today.
     return _tasks
-        .where((t) => t.completed && _dateStr(t.updatedAt) == ds)
+        .where((t) => t.completed && _dateStr(TaskAnalytics.completedTime(t)) == ds)
         .toList();
   }
 
@@ -95,7 +98,7 @@ class TaskEngine {
   List<int> last7DaysCompletions() {
     final now = DateTime.now();
     return List.generate(7, (i) {
-      final d = now.subtract(Duration(days: 6 - i));
+      final d = DateTime(now.year, now.month, now.day - (6 - i));
       return completedOn(d).length;
     });
   }

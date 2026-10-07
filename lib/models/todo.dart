@@ -114,6 +114,8 @@ class Todo {
     DateTime? updatedAt,
     bool? isSynced,
     bool? isDeleted,
+    // `reminderDateTime: null` means "keep"; pass this to remove the reminder.
+    bool clearReminder = false,
   }) {
     // Completing stamps the completion time; un-completing clears it.
     final nextCompleted = completed ?? this.completed;
@@ -134,7 +136,8 @@ class Todo {
       description: description ?? this.description,
       category: category ?? this.category,
       dueDate: dueDate ?? this.dueDate,
-      reminderDateTime: reminderDateTime ?? this.reminderDateTime,
+      reminderDateTime:
+          clearReminder ? null : (reminderDateTime ?? this.reminderDateTime),
       priority: priority ?? this.priority,
       timeSpentSeconds: timeSpentSeconds ?? this.timeSpentSeconds,
       targetMinutes: targetMinutes ?? this.targetMinutes,

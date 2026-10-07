@@ -37,7 +37,8 @@ class _HabitsScreenState extends State<HabitsScreen> {
   List<String> _getLast7Days() {
     final now = DateTime.now();
     return List.generate(7, (i) {
-      final d = now.subtract(Duration(days: 6 - i));
+      // Calendar arithmetic: subtracting 24 h can repeat or skip a day across DST.
+      final d = DateTime(now.year, now.month, now.day - (6 - i));
       return DateFormat('yyyy-MM-dd').format(d);
     });
   }

@@ -131,9 +131,10 @@ class TimetableSlot {
 
   factory TimetableSlot.fromMap(Map<String, dynamic> m) {
     final lastDate = m['lastCompletedDate'] as String?;
-    final bool isComp = lastDate != null
-        ? (lastDate == formatTodayString())
-        : (m['isCompleted'] == true || m['isCompleted'] == 1 || m['isCompleted'] == 'true');
+    // Completion is per day. An old row with only the completed flag has no
+    // date, so it can't be counted as done today (it used to show as done
+    // every day from then on).
+    final bool isComp = lastDate != null && lastDate == formatTodayString();
 
     return TimetableSlot(
       id: m['id'] as String?,
@@ -160,9 +161,10 @@ class TimetableSlot {
 
   factory TimetableSlot.fromSqlite(Map<String, dynamic> m) {
     final lastDate = m['last_completed_date'] as String?;
-    final bool isComp = lastDate != null
-        ? (lastDate == formatTodayString())
-        : (m['is_completed'] == 1 || m['is_completed'] == true);
+    // Completion is per day. An old row with only the completed flag has no
+    // date, so it can't be counted as done today (it used to show as done
+    // every day from then on).
+    final bool isComp = lastDate != null && lastDate == formatTodayString();
 
     return TimetableSlot(
       id: m['id'] as String?,
