@@ -1009,13 +1009,6 @@ class DatabaseService {
     }
   }
 
-  /// Sets every stored day's goal to [goal] in one statement.
-  Future<void> applyStepGoalToAllDays(String uid, int goal) async {
-    final db = await database;
-    await db.update('step_records', {'goal': goal},
-        where: 'uid = ? AND goal != ?', whereArgs: [uid, goal]);
-  }
-
   /// Replaces a past day's count with [steps] exactly (may lower it). Only for
   /// repairing a value known to be invented; normal syncing uses [raiseStepCount].
   Future<void> setStepCountExactly(

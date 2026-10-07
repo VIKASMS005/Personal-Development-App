@@ -10,7 +10,7 @@ import '../widgets/animated_card.dart';
 import '../widgets/expense_insights.dart';
 import 'forms/finance_form.dart';
 
-enum FinancePeriod { daily, weekly, monthly, yearly, all }
+enum FinancePeriod { daily, weekly, monthly, yearly }
 
 class FinanceScreen extends StatefulWidget {
   const FinanceScreen({super.key});
@@ -47,9 +47,6 @@ class _FinanceScreenState extends State<FinanceScreen> {
 
       case FinancePeriod.yearly:
         return all.where((t) => t.date.year == _selectedDate.year).toList();
-
-      case FinancePeriod.all:
-        return all;
     }
   }
 
@@ -68,8 +65,6 @@ class _FinanceScreenState extends State<FinanceScreen> {
         case FinancePeriod.yearly:
           _selectedDate = DateTime(_selectedDate.year - 1, 1, 1);
           break;
-        case FinancePeriod.all:
-          break;
       }
     });
   }
@@ -85,8 +80,6 @@ class _FinanceScreenState extends State<FinanceScreen> {
         return DateTime(_selectedDate.year, _selectedDate.month + 1, 1);
       case FinancePeriod.yearly:
         return DateTime(_selectedDate.year + 1, 1, 1);
-      case FinancePeriod.all:
-        return null;
     }
   }
 
@@ -104,8 +97,6 @@ class _FinanceScreenState extends State<FinanceScreen> {
   }
 
   Future<void> _pickCustomDate() async {
-    if (_selectedPeriod == FinancePeriod.all) return;
-
     if (_selectedPeriod == FinancePeriod.yearly) {
       // Pick year dialog
       final selected = await showDialog<int>(
@@ -171,9 +162,6 @@ class _FinanceScreenState extends State<FinanceScreen> {
 
       case FinancePeriod.yearly:
         return 'Year ${_selectedDate.year}';
-
-      case FinancePeriod.all:
-        return 'All-Time History';
     }
   }
 
@@ -195,7 +183,7 @@ class _FinanceScreenState extends State<FinanceScreen> {
       }
     }
     final netBalance = income - expense;
-    final isLongView = _selectedPeriod == FinancePeriod.yearly || _selectedPeriod == FinancePeriod.all;
+    final isLongView = _selectedPeriod == FinancePeriod.yearly;
 
     // Category breakdown
     final Map<String, double> categoryExpenses = {};
@@ -240,16 +228,13 @@ class _FinanceScreenState extends State<FinanceScreen> {
                         _filterChip(FinancePeriod.monthly, '🗓️ Monthly'),
                         const SizedBox(width: 8),
                         _filterChip(FinancePeriod.yearly, '📆 Yearly'),
-                        const SizedBox(width: 8),
-                        _filterChip(FinancePeriod.all, '♾️ All-Time'),
                       ],
                     ),
                   ),
                 ),
               ),
 
-              // 2. Interactive Date Navigation Bar (Only for Daily / Weekly / Monthly / Yearly)
-              if (_selectedPeriod != FinancePeriod.all)
+              // 2. Interactive Date Navigation Bar
                 SliverToBoxAdapter(
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(16, 4, 16, 10),
@@ -319,7 +304,7 @@ class _FinanceScreenState extends State<FinanceScreen> {
                             children: [
                               Expanded(
                                 child: Text(
-                                  'Summary (${_selectedPeriod == FinancePeriod.all ? 'All Time' : _periodHeaderLabel()})',
+                                  'Summary (${_periodHeaderLabel()})',
                                   style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
@@ -506,7 +491,7 @@ class _FinanceScreenState extends State<FinanceScreen> {
                 ),
               ),
 
-              // Yearly / All-Time: spending by category instead of every transaction
+              // Yearly: spending by category instead of every transaction
               if (isLongView) ...[
                 SliverToBoxAdapter(
                   child: Padding(

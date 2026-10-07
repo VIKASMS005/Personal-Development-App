@@ -248,8 +248,8 @@ class StepProvider extends ChangeNotifier {
           .copyWith(goal: _dailyGoal);
     }
 
-    // Every day is shown against the current goal (one statement, not one write per day).
-    await _db.applyStepGoalToAllDays(uid, _dailyGoal);
+    // Past days keep the goal they had; the current goal only applies to today and
+    // later days (native inserts new day rows with the saved goal).
 
     // Attach tracker callbacks — the native value is the only step count shown.
     _tracker.onStepUpdate = (steps) async {
@@ -329,6 +329,8 @@ class StepProvider extends ChangeNotifier {
     if (_todayRecord != null) {
       _todayRecord = _todayRecord!.copyWith(goal: newGoal);
       await _db.updateStepGoal(uid, _todayRecord!.date, newGoal);
+      // Only today's row changes; past days keep their own goal.
+      _historyRecords = await _db.getAllStepRecords(uid);
     }
 
     // FIX C2: Push the updated goal to native (Kotlin) SharedPreferences so that
