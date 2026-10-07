@@ -776,15 +776,21 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.end,
                         children: [
-                          Text(
-                            hasUsage ? _formatDuration(Duration(seconds: sec.round())) : '',
-                            style: const TextStyle(fontSize: 8, fontWeight: FontWeight.w800, color: AppColors.primary),
-                            overflow: TextOverflow.ellipsis,
+                          // Fixed-height slots above and below the bar so every
+                          // day's label sits on the same line, whatever the bar height.
+                          SizedBox(
+                            height: 12,
+                            child: Text(
+                              hasUsage ? _formatDuration(Duration(seconds: sec.round())) : '',
+                              style: const TextStyle(fontSize: 8, fontWeight: FontWeight.w800, color: AppColors.primary),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           ),
                           const SizedBox(height: 6),
                           Container(
                             width: 24,
-                            height: hasUsage ? (140 * heightFactor).clamp(8.0, 140.0) : 4.0,
+                            height: hasUsage ? (130 * heightFactor).clamp(8.0, 130.0) : 4.0,
                             decoration: BoxDecoration(
                               gradient: hasUsage
                                   ? const LinearGradient(
@@ -798,8 +804,11 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
                             ),
                           ),
                           const SizedBox(height: 8),
-                          Text(
+                          SizedBox(
+                            height: 30,
+                            child: Text(
                             dayLabel,
+                            maxLines: 2,
                             textAlign: TextAlign.center,
                             style: TextStyle(
                               fontSize: 11,
@@ -808,6 +817,7 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
                                   ? theme.colorScheme.onSurface
                                   : theme.colorScheme.onSurface.withValues(alpha: 0.4),
                             ),
+                          ),
                           ),
                         ],
                       ),

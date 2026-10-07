@@ -139,6 +139,83 @@ class ScreenTimeService {
     );
   }
 
+  /// Foreground usage for every day in the range, from one native scan.
+  /// Each session is split at midnight, so a day only gets its own time.
+  /// Returns `yyyy-MM-dd` → that day's summary. Days with no usage are absent.
+  Future<Map<String, DailyScreenTimeSummary>> getDailySummaries({
+    required DateTime startDate,
+    required DateTime endDate,
+  }) async {
+    if (!Platform.isAndroid || startDate.isAfter(endDate)) return {};
+    try {
+      final raw = await _channel.invokeMethod<List<dynamic>>(
+        'getDailyUsage',
+        {'startMs': startDate.millisecondsSinceEpoch, 'endMs': endDate.millisecondsSinceEpoch},
+      );
+      if (raw == null || raw.isEmpty) return {};
+
+      final rows = raw.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      final missing = rows
+          .map((e) => e['packageName'] as String)
+          .toSet()
+          .where((pkg) => !_appMetadataCache.containsKey(pkg))
+          .toList();
+      if (missing.isNotEmpty) {
+        try {
+          final res = await _channel.invokeMethod<Map<dynamic, dynamic>>(
+            'getBatchAppInfo',
+            {'packages': missing},
+          );
+          if (res != null) {
+            for (final entry in res.entries) {
+              _appMetadataCache[entry.key.toString()] = Map<String, String>.from(entry.value as Map);
+            }
+          }
+        } catch (e) {
+          debugPrint('[ScreenTime] Error fetching batch app info: $e');
+        }
+      }
+
+      final byDay = <String, List<AppUsageRecord>>{};
+      for (final r in rows) {
+        final date = r['date'] as String;
+        final pkg = r['packageName'] as String;
+        final day = DateTime.parse(date);
+        final cached = _appMetadataCache[pkg];
+        byDay.putIfAbsent(date, () => []).add(AppUsageRecord(
+              packageName: pkg,
+              appName: cached?['appName'] ?? _formatFallbackName(pkg),
+              usage: Duration(milliseconds: (r['durationMs'] as num).toInt()),
+              startDate: day,
+              endDate: DateTime(day.year, day.month, day.day, 23, 59, 59),
+              iconBase64: cached?['iconBase64'],
+            ));
+      }
+
+      return byDay.map((date, apps) {
+        apps.sort((a, b) => b.usage.compareTo(a.usage));
+        var total = Duration.zero;
+        final categories = <String, Duration>{};
+        for (final app in apps) {
+          total += app.usage;
+          categories[app.category] = (categories[app.category] ?? Duration.zero) + app.usage;
+        }
+        // One day can never hold more than 24 hours of screen time.
+        if (total > const Duration(hours: 24)) total = const Duration(hours: 24);
+        return MapEntry(
+          date,
+          DailyScreenTimeSummary(date: date, totalDuration: total, appUsages: apps, categoryBreakdown: categories),
+        );
+      });
+    } on PlatformException catch (e) {
+      debugPrint('[ScreenTime] Daily usage error: ${e.code} ${e.message}');
+      return {};
+    } catch (e) {
+      debugPrint('[ScreenTime] Daily usage error: $e');
+      return {};
+    }
+  }
+
   /// Aggregate summary for any time range.
   Future<DailyScreenTimeSummary> getSummaryForRange({
     required DateTime startDate,

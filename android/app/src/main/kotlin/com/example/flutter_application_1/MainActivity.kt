@@ -151,6 +151,24 @@ class MainActivity : FlutterFragmentActivity() {
                         }
                     }
 
+                    "getDailyUsage" -> {
+                        val startMs = call.argument<Long>("startMs")
+                        val endMs = call.argument<Long>("endMs")
+                        if (startMs == null || endMs == null) {
+                            result.error("INVALID_ARG", "startMs and endMs are required", null)
+                            return@setMethodCallHandler
+                        }
+                        if (!hasUsagePermission()) {
+                            result.error("NO_PERMISSION", "Usage access not granted", null)
+                            return@setMethodCallHandler
+                        }
+                        try {
+                            result.success(computeDailyForegroundUsage(startMs, endMs))
+                        } catch (e: Exception) {
+                            result.error("USAGE_ERROR", e.message, null)
+                        }
+                    }
+
                     "hasUsagePermission" -> {
                         result.success(hasUsagePermission())
                     }
@@ -185,6 +203,62 @@ class MainActivity : FlutterFragmentActivity() {
      *   4. All sessions belonging to the same package are cleanly aggregated into a single entry.
      */
     private fun computeForegroundUsage(startMs: Long, endMs: Long): List<Map<String, Any>> {
+        val durationMap = HashMap<String, Long>()
+        scanForegroundSessions(startMs, endMs) { pkg, from, to ->
+            durationMap[pkg] = (durationMap[pkg] ?: 0L) + (to - from)
+        }
+
+        // Filter: minimum 5 seconds of actual foreground user interaction
+        // Deduplicate and sort descending by duration
+        return durationMap.entries
+            .filter { it.value >= 5000L } // at least 5 seconds
+            .sortedByDescending { it.value }
+            .map { mapOf("packageName" to it.key, "durationMs" to it.value) }
+    }
+
+    /**
+     * Same foreground rules as [computeForegroundUsage], but split by local
+     * calendar day: each session is cut at midnight so every day only gets the
+     * time that happened on it. One scan covers the whole range.
+     * Returns [{date: "yyyy-MM-dd", packageName, durationMs}, ...].
+     */
+    private fun computeDailyForegroundUsage(startMs: Long, endMs: Long): List<Map<String, Any>> {
+        val fmt = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+        val perDay = HashMap<String, HashMap<String, Long>>()
+        val cal = java.util.Calendar.getInstance()
+
+        fun nextMidnight(ms: Long): Long {
+            cal.timeInMillis = ms
+            cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
+            cal.set(java.util.Calendar.MINUTE, 0)
+            cal.set(java.util.Calendar.SECOND, 0)
+            cal.set(java.util.Calendar.MILLISECOND, 0)
+            cal.add(java.util.Calendar.DAY_OF_MONTH, 1)
+            return cal.timeInMillis
+        }
+
+        scanForegroundSessions(startMs, endMs) { pkg, from, to ->
+            var cursor = from
+            while (cursor < to) {
+                val cut = minOf(to, nextMidnight(cursor))
+                val day = fmt.format(java.util.Date(cursor))
+                val apps = perDay.getOrPut(day) { HashMap() }
+                apps[pkg] = (apps[pkg] ?: 0L) + (cut - cursor)
+                cursor = cut
+            }
+        }
+
+        val out = ArrayList<Map<String, Any>>()
+        for ((day, apps) in perDay) {
+            for ((pkg, ms) in apps) {
+                if (ms >= 5000L) out.add(mapOf("date" to day, "packageName" to pkg, "durationMs" to ms))
+            }
+        }
+        return out
+    }
+
+    /** Walks UsageEvents and reports each user-facing foreground session as (pkg, fromMs, toMs). */
+    private fun scanForegroundSessions(startMs: Long, endMs: Long, record: (String, Long, Long) -> Unit) {
         val usageStatsManager =
             getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
 
@@ -193,7 +267,6 @@ class MainActivity : FlutterFragmentActivity() {
 
         var currentForegroundPkg: String? = null
         var currentForegroundStart: Long = 0L
-        val durationMap = HashMap<String, Long>()
 
         val blacklist = setOf(
             "com.android.systemui",
@@ -255,8 +328,7 @@ class MainActivity : FlutterFragmentActivity() {
                     if (currentForegroundPkg != null && currentForegroundStart > 0L) {
                         val duration = timestamp - currentForegroundStart
                         if (duration > 0 && isUserFacingApp(currentForegroundPkg!!)) {
-                            durationMap[currentForegroundPkg!!] =
-                                (durationMap[currentForegroundPkg!!] ?: 0L) + duration
+                            record(currentForegroundPkg!!, currentForegroundStart, timestamp)
                         }
                     }
 
@@ -274,7 +346,7 @@ class MainActivity : FlutterFragmentActivity() {
                     if (currentForegroundPkg == pkg && currentForegroundStart > 0L) {
                         val duration = timestamp - currentForegroundStart
                         if (duration > 0 && isUserFacingApp(pkg)) {
-                            durationMap[pkg] = (durationMap[pkg] ?: 0L) + duration
+                            record(pkg, currentForegroundStart, timestamp)
                         }
                         currentForegroundPkg = null
                         currentForegroundStart = 0L
@@ -287,8 +359,7 @@ class MainActivity : FlutterFragmentActivity() {
                     if (currentForegroundPkg != null && currentForegroundStart > 0L) {
                         val duration = timestamp - currentForegroundStart
                         if (duration > 0 && isUserFacingApp(currentForegroundPkg!!)) {
-                            durationMap[currentForegroundPkg!!] =
-                                (durationMap[currentForegroundPkg!!] ?: 0L) + duration
+                            record(currentForegroundPkg!!, currentForegroundStart, timestamp)
                         }
                     }
                     currentForegroundPkg = null
@@ -301,17 +372,9 @@ class MainActivity : FlutterFragmentActivity() {
         if (currentForegroundPkg != null && currentForegroundStart > 0L) {
             val duration = endMs - currentForegroundStart
             if (duration > 0 && isUserFacingApp(currentForegroundPkg!!)) {
-                durationMap[currentForegroundPkg!!] =
-                    (durationMap[currentForegroundPkg!!] ?: 0L) + duration
+                record(currentForegroundPkg!!, currentForegroundStart, endMs)
             }
         }
-
-        // Filter: minimum 5 seconds of actual foreground user interaction
-        // Deduplicate and sort descending by duration
-        return durationMap.entries
-            .filter { it.value >= 5000L } // at least 5 seconds
-            .sortedByDescending { it.value }
-            .map { mapOf("packageName" to it.key, "durationMs" to it.value) }
     }
 
     private fun hasUsagePermission(): Boolean {

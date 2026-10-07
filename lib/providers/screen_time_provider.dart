@@ -66,43 +66,81 @@ class ScreenTimeProvider extends ChangeNotifier {
     required DateTime endDate,
     required String dateLabel,
   }) async {
-    final live = await _service.getSummaryForRange(
-      startDate: startDate,
-      endDate: endDate,
-      dateLabel: dateLabel,
-    );
-    if (live.totalDuration > Duration.zero) {
-      if (startDate.year == endDate.year &&
-          startDate.month == endDate.month &&
-          startDate.day == endDate.day) {
-        await _db.upsertScreenTimeSummary(uid, live);
-      }
-      return live;
+    final firstDay = DateTime(startDate.year, startDate.month, startDate.day);
+    final lastDay = DateTime(endDate.year, endDate.month, endDate.day);
+    if (firstDay == lastDay) {
+      return _singleDay(uid, startDate, endDate, dateLabel);
     }
 
-    final apps = <AppUsageRecord>[];
+    // Multi-day ranges (a month-week, a month) are built day by day. Android
+    // only keeps detailed usage events for a limited time, so a single live
+    // query over a whole month can miss most of it. Each day uses whichever
+    // is larger: the live value, or what was saved for that day earlier.
+    final live = await _service.getDailySummaries(startDate: startDate, endDate: endDate);
+    final today = DateTime.now();
+    final todayKey = _dateKey(today);
+
     var total = Duration.zero;
+    final appTotals = <String, AppUsageRecord>{};
     final categories = <String, Duration>{};
-    var day = DateTime(startDate.year, startDate.month, startDate.day);
-    final lastDay = DateTime(endDate.year, endDate.month, endDate.day);
-    while (!day.isAfter(lastDay)) {
-      final stored = await _db.getScreenTimeSummary(uid, _dateKey(day));
-      if (stored != null) {
-        total += stored.totalDuration;
-        apps.addAll(stored.appUsages);
-        for (final entry in stored.categoryBreakdown.entries) {
-          categories[entry.key] =
-              (categories[entry.key] ?? Duration.zero) + entry.value;
-        }
+    for (var day = firstDay; !day.isAfter(lastDay); day = DateTime(day.year, day.month, day.day + 1)) {
+      final key = _dateKey(day);
+      final stored = await _db.getScreenTimeSummary(uid, key);
+      final fresh = live[key];
+      DailyScreenTimeSummary? best = stored;
+      if (fresh != null && fresh.totalDuration > (stored?.totalDuration ?? Duration.zero)) {
+        best = fresh;
+        // Save finished days so the history survives after Android prunes its events.
+        if (key != todayKey) await _db.upsertScreenTimeSummary(uid, fresh);
       }
-      day = day.add(const Duration(days: 1));
+      if (best == null) continue;
+      total += best.totalDuration;
+      for (final app in best.appUsages) {
+        final prev = appTotals[app.packageName];
+        appTotals[app.packageName] = AppUsageRecord(
+          packageName: app.packageName,
+          appName: app.appName,
+          usage: (prev?.usage ?? Duration.zero) + app.usage,
+          startDate: startDate,
+          endDate: endDate,
+          category: app.category,
+          iconBase64: app.iconBase64 ?? prev?.iconBase64,
+        );
+      }
+      for (final entry in best.categoryBreakdown.entries) {
+        categories[entry.key] = (categories[entry.key] ?? Duration.zero) + entry.value;
+      }
     }
+    final apps = appTotals.values.toList()..sort((a, b) => b.usage.compareTo(a.usage));
     return DailyScreenTimeSummary(
       date: dateLabel,
       totalDuration: total,
       appUsages: apps,
       categoryBreakdown: categories,
     );
+  }
+
+  /// One day (or part of today): the larger of the live value and the saved one.
+  Future<DailyScreenTimeSummary> _singleDay(
+      String uid, DateTime startDate, DateTime endDate, String dateLabel) async {
+    final live = await _service.getSummaryForRange(
+      startDate: startDate,
+      endDate: endDate,
+      dateLabel: dateLabel,
+    );
+    final stored = await _db.getScreenTimeSummary(uid, _dateKey(startDate));
+    if (stored != null && stored.totalDuration > live.totalDuration) {
+      return DailyScreenTimeSummary(
+        date: dateLabel,
+        totalDuration: stored.totalDuration,
+        appUsages: stored.appUsages,
+        categoryBreakdown: stored.categoryBreakdown,
+      );
+    }
+    if (live.totalDuration > Duration.zero) {
+      await _db.upsertScreenTimeSummary(uid, live);
+    }
+    return live;
   }
 
   static String _dateKey(DateTime date) =>
