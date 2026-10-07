@@ -120,7 +120,8 @@ class _HabitsScreenState extends State<HabitsScreen> {
               itemCount: habits.length,
               itemBuilder: (context, index) {
                 final h = habits[index];
-                final isDoneToday = h.history[todayStr] ?? false;
+                // Today for a daily habit; any day this week for a weekly one.
+                final isDoneToday = h.isDoneThisPeriod;
 
                 return AnimatedListItem(
                   key: ValueKey(h.id),
@@ -134,10 +135,10 @@ class _HabitsScreenState extends State<HabitsScreen> {
                         children: [
                           Row(
                             children: [
-                              // Daily Checkbox Button
+                              // Check button (today, or this week for a weekly habit)
                               GestureDetector(
                                 onTap: () {
-                                  habitProvider.toggleDay(h, todayStr);
+                                  habitProvider.toggleCurrentPeriod(h);
                                 },
                                 child: AnimatedContainer(
                                   duration: const Duration(milliseconds: 250),
@@ -188,7 +189,7 @@ class _HabitsScreenState extends State<HabitsScreen> {
                                         ),
                                         const SizedBox(width: 4),
                                         Text(
-                                          '${h.streak} day streak',
+                                          '${h.streak} ${h.streakUnit} streak',
                                           style: TextStyle(
                                             fontSize: 12,
                                             fontWeight: FontWeight.w700,

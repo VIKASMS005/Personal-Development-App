@@ -111,6 +111,7 @@ class GrowEngine {
         tasksCompletedToday: _taskEngine.completedTodayCount,
         tasksPending: _taskEngine.pendingCount,
         bestStreak: _habitEngine.bestCurrentStreak(),
+        bestStreakUnit: _habitEngine.bestStreakUnit(),
         weeklyHabitRate: _habitEngine.overallWeeklyRate(),
         weeklyTasksCompleted: _taskEngine.completedThisWeek,
       );
@@ -156,8 +157,8 @@ class GrowEngine {
         final rate = (_habitEngine.completionRateThisWeek(h) * 100).round();
         final streak = h.streak;
         buffer.writeln(
-            '  • ${h.title} — $rate% this week'
-            '${streak > 0 ? ", $streak-day streak" : ""}');
+            '  • ${h.title} (${h.frequency.name}) — $rate% this week'
+            '${streak > 0 ? ", $streak-${h.streakUnit} streak" : ""}');
       }
       buffer.writeln(
           '  • Overall habit rate: ${(p.weeklyHabitRate * 100).round()}% this week '
@@ -244,7 +245,7 @@ class GrowEngine {
     if (p.bestStreak > 0) {
       final bestHabit = _habitEngine.bestStreakHabit();
       buffer.writeln(
-          '\n🔥 BEST STREAK: ${p.bestStreak} days'
+          '\n🔥 BEST STREAK: ${p.bestStreak} ${p.bestStreakUnit}s'
           '${bestHabit != null ? " (${bestHabit.title})" : ""}');
     }
 
@@ -284,6 +285,8 @@ class TodayProgress {
   final int tasksCompletedToday;
   final int tasksPending;
   final int bestStreak;
+  /// 'day' or 'week'.
+  final String bestStreakUnit;
   final double weeklyHabitRate;
   final int weeklyTasksCompleted;
 
@@ -293,6 +296,7 @@ class TodayProgress {
     required this.tasksCompletedToday,
     required this.tasksPending,
     required this.bestStreak,
+    this.bestStreakUnit = 'day',
     required this.weeklyHabitRate,
     required this.weeklyTasksCompleted,
   });

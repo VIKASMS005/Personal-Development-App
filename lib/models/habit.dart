@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:uuid/uuid.dart';
+import '../utils/month_weeks.dart';
 
 enum HabitFrequency { daily, weekly }
 
@@ -84,6 +85,49 @@ class Habit {
     }
     return streakCount;
   }
+
+  /// Consecutive month-weeks (1–7, 8–14, ...) with at least one completion,
+  /// ending with this week (or last week, if this week isn't done yet).
+  static int calculateWeeklyStreak(Map<String, bool> history, [DateTime? referenceDate]) {
+    final ref = referenceDate ?? DateTime.now();
+    bool doneIn(MonthWeek w) => w.days.any((d) => history[_key(d)] == true);
+
+    var week = monthWeekOf(ref);
+    if (!doneIn(week)) {
+      week = previousMonthWeek(week);
+      if (!doneIn(week)) return 0;
+    }
+    var count = 0;
+    while (doneIn(week)) {
+      count++;
+      week = previousMonthWeek(week);
+    }
+    return count;
+  }
+
+  /// Streak in this habit's own unit: days for daily habits, weeks for weekly ones.
+  static int streakFor(HabitFrequency frequency, Map<String, bool> history, [DateTime? referenceDate]) =>
+      frequency == HabitFrequency.weekly
+          ? calculateWeeklyStreak(history, referenceDate)
+          : calculateStreak(history, referenceDate);
+
+  static String _key(DateTime d) =>
+      '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+  bool get isWeekly => frequency == HabitFrequency.weekly;
+
+  /// 'day' or 'week', the unit [streak] counts in.
+  String get streakUnit => isWeekly ? 'week' : 'day';
+
+  /// Done for the period containing [date]: that day for a daily habit, any
+  /// day of that month-week for a weekly one.
+  bool isDoneInPeriodOf(DateTime date) {
+    if (!isWeekly) return history[_key(date)] == true;
+    return monthWeekOf(date).days.any((d) => history[_key(d)] == true);
+  }
+
+  /// Done for the current period (today, or this week for a weekly habit).
+  bool get isDoneThisPeriod => isDoneInPeriodOf(DateTime.now());
 
   bool get isCompletedToday {
     final today = DateTime.now().toIso8601String().split('T')[0];

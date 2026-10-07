@@ -183,9 +183,11 @@ class TaskAnalytics {
         now = now ?? DateTime.now(),
         sessions = _taskSessions(todos, sessions);
 
+  /// Sessions of tasks that still exist. Time from goals, and from tasks the
+  /// user deleted, is left out.
   static List<TaskSession> _taskSessions(List<Todo> todos, List<TaskSession> sessions) {
-    final goalIds = todos.where((t) => t.isGoal).map((t) => t.id).toSet();
-    return sessions.where((s) => !goalIds.contains(s.taskId)).toList();
+    final liveTaskIds = todos.where((t) => t.isTask && !t.isDeleted).map((t) => t.id).toSet();
+    return sessions.where((s) => liveTaskIds.contains(s.taskId)).toList();
   }
 
   /// When a completed task was completed. Older records without a completion
@@ -349,6 +351,8 @@ class TaskAnalytics {
 
   /// Timer sessions that happened on [day]. Never returns anything for a
   /// future day.
+  List<TaskSession> sessionsOnDay(DateTime day) => sessionsOn(sessions, day, now: now);
+
   static List<TaskSession> sessionsOn(List<TaskSession> sessions, DateTime day, {DateTime? now}) {
     final d = dayOf(day);
     if (d.isAfter(dayOf(now ?? DateTime.now()))) return const [];

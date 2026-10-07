@@ -6,6 +6,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter_ringtone_player/flutter_ringtone_player.dart';
 import 'package:timezone/data/latest.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
+import '../utils/month_weeks.dart';
 
 class NotificationService {
   /// Deterministic FNV-1a 32-bit hash for a [String] id.
@@ -544,11 +545,48 @@ class NotificationService {
   /// Daily 8:30 PM warning. When the habit is already done today the first
   /// warning is tomorrow's, so the "you haven't completed it today" text is
   /// never sent on a day it was completed.
+  ///
+  /// A [weekly] habit instead gets one warning at 8:30 PM on the last day of
+  /// the week (1–7, 8–14, ...): this week's if it isn't done yet ([doneToday]
+  /// then means "done this week"), otherwise next week's. It is re-armed each
+  /// time habits load.
   static Future<void> scheduleHabitStreakWarning({
     required int id,
     required String habitTitle,
     bool doneToday = false,
+    bool weekly = false,
   }) async {
+    if (weekly) {
+      await _plugin.cancel(id);
+      final now = DateTime.now();
+      var week = monthWeekOf(now);
+      var target = DateTime(week.last.year, week.last.month, week.last.day, 20, 30);
+      if (doneToday || target.isBefore(now)) {
+        week = monthWeekOf(week.end);
+        target = DateTime(week.last.year, week.last.month, week.last.day, 20, 30);
+      }
+      await _plugin.zonedSchedule(
+        id,
+        '🔥 Streak Alert: $habitTitle',
+        "Last day of the week! You haven't completed $habitTitle this week yet.",
+        tz.TZDateTime.now(tz.local).add(target.difference(now)),
+        NotificationDetails(
+          android: AndroidNotificationDetails(
+            _channelId,
+            _channelName,
+            channelDescription: _channelDesc,
+            importance: Importance.high,
+            priority: Priority.high,
+            playSound: true,
+            enableVibration: true,
+          ),
+        ),
+        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+        uiLocalNotificationDateInterpretation:
+            UILocalNotificationDateInterpretation.absoluteTime,
+      );
+      return;
+    }
     await scheduleDailyReminder(
       id: id,
       title: '🔥 Streak Alert: $habitTitle',
@@ -560,8 +598,9 @@ class NotificationService {
   }
 
   // ==================== DAILY DIGEST (8:50 AM) ====================
-  /// Schedules a daily notification at 8:50 AM with a 4-second ringtone.
-  /// Delivers yesterday's step summary and screen time overview.
+  /// Schedules a daily notification at 8:50 AM.
+  /// Delivers yesterday's step summary and screen time overview. Its sound is
+  /// the notification's own, so it plays even when the app is closed.
   static Future<void> scheduleDailyDigest() async {
     const int digestId = 88500; // unique id for 08:50 digest
 
@@ -601,13 +640,9 @@ class NotificationService {
             UILocalNotificationDateInterpretation.absoluteTime,
         matchDateTimeComponents: DateTimeComponents.time, // repeats daily
       );
-      // Play a 4-second notification ringtone alongside the notification
-      Future.delayed(duration, () {
-        FlutterRingtonePlayer().playNotification(looping: false, asAlarm: false);
-        Future.delayed(const Duration(seconds: 4), () {
-          FlutterRingtonePlayer().stop();
-        });
-      });
+      // (An extra in-app ringtone used to be timed here. It only played if the
+      // app happened to be running at 8:50 and repeated once per app start,
+      // so the notification's own sound is used instead.)
     } catch (e) {
       debugPrint('Error scheduling daily digest: $e');
     }

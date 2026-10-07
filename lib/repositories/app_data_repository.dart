@@ -135,17 +135,25 @@ class AppDataRepository {
     final p = _habits;
     if (p == null) return {};
     final habits = p.habits;
-    final completedToday = habits.where((h) => h.isCompletedToday).length;
+    // Weekly habits count as done once they are done this week.
+    final completedToday = habits.where((h) => h.isDoneThisPeriod).length;
+    // Best streak, comparing a week as 7 days.
+    final best = habits.isEmpty
+        ? null
+        : habits.reduce((a, b) =>
+            (a.isWeekly ? a.streak * 7 : a.streak) >= (b.isWeekly ? b.streak * 7 : b.streak) ? a : b);
 
     return {
       'totalHabits': habits.length,
       'completedToday': completedToday,
       'todayCompletionRate': habits.isEmpty ? 0 : ((completedToday / habits.length) * 100).round(),
-      'bestStreak': habits.isEmpty ? 0 : habits.map((h) => h.streak).reduce((a, b) => a > b ? a : b),
+      'bestStreak': best?.streak ?? 0,
+      'bestStreakUnit': best?.streakUnit ?? 'day',
       'habits': habits.map((h) => {
         'title': h.title,
-        'completedToday': h.isCompletedToday,
+        'completedToday': h.isDoneThisPeriod,
         'streak': h.streak,
+        'streakUnit': h.streakUnit,
         'frequency': h.frequency.name,
       }).toList(),
     };
@@ -325,10 +333,10 @@ class AppDataRepository {
       // 3. HABITS (Streaks + Consistency)
       buf.writeln('--- 🎯 HABITS & ROUTINES ---');
       buf.writeln('• Today\'s Completed Habits: ${habits["completedToday"]}/${habits["totalHabits"]} (${habits["todayCompletionRate"]}%)');
-      buf.writeln('• Best Current Streak: ${habits["bestStreak"]} days');
+      buf.writeln('• Best Current Streak: ${habits["bestStreak"]} ${habits["bestStreakUnit"] ?? "day"}s');
       final habitList = habits['habits'] as List? ?? [];
       for (final h in habitList) {
-        buf.writeln('  ${h["completedToday"] == true ? "✓" : "○"} ${h["title"]} — Streak: ${h["streak"]} days (${h["frequency"]})');
+        buf.writeln('  ${h["completedToday"] == true ? "✓" : "○"} ${h["title"]} — Streak: ${h["streak"]} ${h["streakUnit"] ?? "day"}s (${h["frequency"]})');
       }
       buf.writeln();
 

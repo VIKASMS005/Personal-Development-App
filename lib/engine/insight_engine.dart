@@ -44,7 +44,7 @@ class InsightEngine {
     final bestHabit = habitEngine.bestStreakHabit();
     if (bestHabit != null && bestHabit.streak >= 3) {
       insights.add(GrowInsight(
-        text: 'You\'re on a ${bestHabit.streak}-day streak with "${bestHabit.title}". '
+        text: 'You\'re on a ${bestHabit.streak}-${bestHabit.streakUnit} streak with "${bestHabit.title}". '
             'Keep the momentum going today!',
         type: InsightType.success,
         icon: '🔥',
@@ -74,13 +74,13 @@ class InsightEngine {
       ));
     }
 
-    // 4. Habits at risk (missed 2+ days)
+    // 4. Habits at risk (missed 2+ days, or a weekly habit missed last week and not done yet this week)
     final atRisk = habitEngine.habitsAtRisk();
     if (atRisk.isNotEmpty) {
       final names = atRisk.take(2).map((h) => '"${h.title}"').join(' and ');
       insights.add(GrowInsight(
-        text: 'You\'ve missed $names for 2+ days. '
-            'A small action today is better than a missed day.',
+        text: 'You\'ve fallen behind on $names. '
+            'A small action today is better than another miss.',
         type: InsightType.warning,
         icon: '⚠️',
       ));
@@ -206,7 +206,7 @@ class InsightEngine {
     if (tasksDone > 0 || tasksPending > 0) {
       parts.add('$tasksDone task${tasksDone != 1 ? 's' : ''} completed');
     }
-    if (streak >= 3) parts.add('🔥 $streak-day streak');
+    if (streak >= 3) parts.add('🔥 $streak-${habitEngine.bestStreakUnit()} streak');
 
     if (parts.isEmpty) return 'Start your day — add a habit or task!';
     return parts.join(' · ');

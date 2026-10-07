@@ -139,8 +139,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _lastWatchedMinute = currentMinute;
       }
 
-      // 1. Check Alarms
-      final alarms = context.read<AlarmProvider>().alarms.where((a) => a.isEnabled).toList();
+      // 1. Check Alarms. One-time alarms whose minute has passed (e.g. they
+      // rang while the app was in the background) are switched off first.
+      final alarmProv = context.read<AlarmProvider>();
+      alarmProv.expirePassedOneTimeAlarms();
+      final alarms = alarmProv.alarms.where((a) => a.isEnabled).toList();
       for (final alarm in alarms) {
         if (alarm.hour == now.hour && alarm.minute == now.minute) {
           // BUG 5 FIX: Only ring on the correct day of the week.
@@ -588,7 +591,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   Expanded(
                     child: _CompactModuleTile(
                       title: 'Finance & Budget',
-                      subtitle: NumberFormat.currency(symbol: '₹', decimalDigits: 0).format(finance.totalExpense),
+                      // This calendar year's spending, labelled with the year.
+                      subtitle: '${NumberFormat.currency(symbol: '₹', decimalDigits: 0).format(finance.expenseForYear(DateTime.now().year))} in ${DateTime.now().year}',
                       icon: Icons.account_balance_wallet_rounded,
                       color: AppColors.finance,
                       badgeText: finance.transactions.isNotEmpty ? 'Active' : '0',
@@ -799,7 +803,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final h = total.inHours;
     final m = total.inMinutes % 60;
     // Without usage access (or before the first read) there is no real value to show.
-    final known = screenProv.hasPermission && screenProv.todaySummary != null;
+    final known = screenProv.hasPermission && !screenProv.readFailed && screenProv.todaySummary != null;
     final timeStr = !known ? '—' : (h > 0 ? '${h}h ${m}m' : '${m}m');
 
     return Card(
@@ -1061,7 +1065,7 @@ class _TodayProgressCard extends StatelessWidget {
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Text(
-                    '🔥 ${progress.bestStreak}d streak',
+                    '🔥 ${progress.bestStreak}${progress.bestStreakUnit == 'week' ? 'w' : 'd'} streak',
                     style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: Colors.orange),
                   ),
                 ),

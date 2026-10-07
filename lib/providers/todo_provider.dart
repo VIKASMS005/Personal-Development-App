@@ -222,7 +222,7 @@ class TodoProvider extends ChangeNotifier {
   TaskAnalytics analytics({DateTime? now}) =>
       TaskAnalytics(todos: _todos, sessions: _sessions, now: now);
 
-  /// Timer sessions that actually happened on [day] (none for future days).
-  List<TaskSession> sessionsOn(DateTime day) =>
-      TaskAnalytics.sessionsOn(_sessions, day);
+  /// Timer sessions that actually happened on [day] (none for future days),
+  /// for tasks that still exist.
+  List<TaskSession> sessionsOn(DateTime day) => analytics().sessionsOnDay(day);
 }

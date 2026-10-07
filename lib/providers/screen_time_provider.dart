@@ -17,6 +17,7 @@ class ScreenTimeProvider extends ChangeNotifier {
   bool _isLoading = false;
   bool _hasPermission = true;
   bool _permissionChecked = false;
+  bool _readFailed = false;
 
   DailyScreenTimeSummary? get todaySummary => _todaySummary;
   List<DailyScreenTimeSummary> get weeklySummaries => _weeklySummaries;
@@ -25,9 +26,16 @@ class ScreenTimeProvider extends ChangeNotifier {
   bool get hasPermission => _hasPermission;
   bool get permissionChecked => _permissionChecked;
 
+  /// The last load couldn't read usage from Android (with permission granted),
+  /// so the numbers shown may be missing time.
+  bool get readFailed => _readFailed;
+
+  /// Usage reads that have failed so far (see [ScreenTimeService.readErrorCount]).
+  int get readErrorCount => _service.readErrorCount;
+
   String get todayFormattedTotal {
     // No reading (not loaded yet, or no usage access) is not "0h 0m".
-    if (_todaySummary == null || !_hasPermission) return '—';
+    if (_todaySummary == null || !_hasPermission || _readFailed) return '—';
     final dur = _todaySummary!.totalDuration;
     final h = dur.inHours;
     final m = dur.inMinutes % 60;
@@ -166,6 +174,7 @@ class ScreenTimeProvider extends ChangeNotifier {
       {bool isResume = false, String uid = 'local_user'}) async {
     if (!Platform.isAndroid) return;
 
+    final errorsBefore = _service.readErrorCount;
     if (isResume &&
         _weeklySummaries.isNotEmpty &&
         _prevWeeklySummaries.isNotEmpty) {
@@ -181,6 +190,7 @@ class ScreenTimeProvider extends ChangeNotifier {
         final idx = _weeklySummaries.indexWhere((s) => s.date == todayStr);
         if (idx != -1 && _todaySummary != null) {
           _weeklySummaries[idx] = _todaySummary!;
+          _readFailed = _service.readErrorCount > errorsBefore;
           notifyListeners();
           return;
         }
@@ -245,9 +255,12 @@ class ScreenTimeProvider extends ChangeNotifier {
         lastWeekList.add(sum);
       }
       _prevWeeklySummaries = lastWeekList;
+      _readFailed = _service.readErrorCount > errorsBefore;
     } catch (e) {
+      // A failed load is a read error, not a missing permission (that was
+      // checked separately above).
       debugPrint('ScreenTimeProvider error: $e');
-      _hasPermission = false;
+      _readFailed = true;
       _permissionChecked = true;
     }
 

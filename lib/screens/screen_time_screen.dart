@@ -22,6 +22,9 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
   int _selectedMonth = DateTime.now().month;
   int _selectedYear = DateTime.now().year;
 
+  /// The open tab's last load hit a usage read error.
+  bool _tabReadFailed = false;
+
   // Specific day state
   bool _isLoadingDay = false;
   List<AppUsageRecord> _dayApps = [];
@@ -65,6 +68,7 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
 
   Future<void> _loadDayData(DateTime date) async {
     setState(() => _isLoadingDay = true);
+    final errorsBefore = ScreenTimeService.instance.readErrorCount;
     final isToday = date.year == DateTime.now().year &&
         date.month == DateTime.now().month &&
         date.day == DateTime.now().day;
@@ -82,6 +86,7 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
         _dayApps = summary.appUsages;
         _dayTotal = summary.totalDuration;
         _isLoadingDay = false;
+        _tabReadFailed = ScreenTimeService.instance.readErrorCount > errorsBefore;
       });
     }
   }
@@ -89,6 +94,7 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
   Future<void> _loadWeekData(DateTime date) async {
     setState(() => _isLoadingWeek = true);
     final prov = context.read<ScreenTimeProvider>();
+    final errorsBefore = prov.readErrorCount;
     final summaries = await prov.getWeekDays(date);
 
     Duration total = Duration.zero;
@@ -101,6 +107,7 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
         _weekSummaries = summaries;
         _weekTotal = total;
         _isLoadingWeek = false;
+        _tabReadFailed = prov.readErrorCount > errorsBefore;
       });
     }
   }
@@ -108,6 +115,7 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
   Future<void> _loadMonthData(int year, int month) async {
     setState(() => _isLoadingMonth = true);
     final prov = context.read<ScreenTimeProvider>();
+    final errorsBefore = prov.readErrorCount;
     final weeks = await prov.getMonthWeeks(year, month);
 
     Duration total = Duration.zero;
@@ -120,6 +128,7 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
         _monthWeeks = weeks;
         _monthTotal = total;
         _isLoadingMonth = false;
+        _tabReadFailed = prov.readErrorCount > errorsBefore;
       });
     }
   }
@@ -127,6 +136,7 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
   Future<void> _loadYearData(int year) async {
     setState(() => _isLoadingYear = true);
     final prov = context.read<ScreenTimeProvider>();
+    final errorsBefore = prov.readErrorCount;
     final months = await prov.getYearMonths(year);
 
     Duration total = Duration.zero;
@@ -139,6 +149,7 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
         _yearMonths = months;
         _yearTotal = total;
         _isLoadingYear = false;
+        _tabReadFailed = prov.readErrorCount > errorsBefore;
       });
     }
   }
@@ -197,7 +208,9 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
             children: [
               // Permission Banner if Usage Access not enabled
               if (!screenProv.hasPermission)
-                _buildPermissionBanner(theme, screenProv),
+                _buildPermissionBanner(theme, screenProv)
+              else if (screenProv.readFailed || _tabReadFailed)
+                _buildReadErrorBanner(screenProv),
 
               // 1. Period Selector (Day / Week / Month / Year)
               Padding(
@@ -395,6 +408,39 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
               });
               _loadCurrentTab();
             },
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Usage access is granted but Android's usage data couldn't be read, so
+  /// the times below may be missing some usage.
+  Widget _buildReadErrorBanner(ScreenTimeProvider prov) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+      padding: const EdgeInsets.fromLTRB(14, 8, 6, 8),
+      decoration: BoxDecoration(
+        color: Colors.red.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.red.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.error_outline_rounded, color: Colors.red, size: 20),
+          const SizedBox(width: 10),
+          const Expanded(
+            child: Text(
+              "Couldn't read screen time from Android. Some usage may be missing.",
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+            ),
+          ),
+          TextButton(
+            onPressed: () {
+              prov.recheckAndLoad();
+              _loadCurrentTab();
+            },
+            child: const Text('Retry'),
           ),
         ],
       ),

@@ -17,6 +17,11 @@ class FinanceProvider extends ChangeNotifier {
       .where((t) => t.amount < 0)
       .fold(0.0, (sum, t) => sum + t.amount.abs());
 
+  /// Money spent in calendar year [year].
+  double expenseForYear(int year) => _transactions
+      .where((t) => t.amount < 0 && t.date.year == year)
+      .fold(0.0, (sum, t) => sum + t.amount.abs());
+
   void clear() {
     _transactions = [];
     notifyListeners();

@@ -26,6 +26,12 @@ class ScreenTimeService {
   // Range query cache for completed past windows (key = startMs_endMs)
   final Map<String, List<AppUsageRecord>> _rangeUsageCache = {};
 
+  /// Number of usage reads that failed (other than for missing permission).
+  /// Callers compare it before and after a load to tell "no usage" apart from
+  /// "couldn't read usage".
+  int get readErrorCount => _readErrorCount;
+  int _readErrorCount = 0;
+
   /// Query foreground-only per-app usage for the given time range.
   /// Returns only apps the user ACTUALLY had in foreground (min 1 second).
   Future<List<AppUsageRecord>> getUsageForRange({
@@ -119,10 +125,12 @@ class ScreenTimeService {
       if (e.code == 'NO_PERMISSION') {
         debugPrint('[ScreenTime] Usage access not granted');
       } else {
+        _readErrorCount++;
         debugPrint('[ScreenTime] Platform error: ${e.message}');
       }
       return [];
     } catch (e) {
+      _readErrorCount++;
       debugPrint('[ScreenTime] Query error: $e');
       return [];
     }
@@ -208,9 +216,11 @@ class ScreenTimeService {
         );
       });
     } on PlatformException catch (e) {
+      if (e.code != 'NO_PERMISSION') _readErrorCount++;
       debugPrint('[ScreenTime] Daily usage error: ${e.code} ${e.message}');
       return {};
     } catch (e) {
+      _readErrorCount++;
       debugPrint('[ScreenTime] Daily usage error: $e');
       return {};
     }
