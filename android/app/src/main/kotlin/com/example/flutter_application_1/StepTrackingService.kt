@@ -54,7 +54,7 @@ class StepTrackingService : Service(), SensorEventListener2 {
         private const val ACTION_FLUSH = "com.example.flutter_application_1.STEP_FLUSH"
 
         /** How often pending steps are checked for validation while the CPU is awake. */
-        private const val TICK_INTERVAL_MS = 2_000L
+        private const val TICK_INTERVAL_MS = 500L
 
         @Volatile
         var isRunning = false
@@ -131,7 +131,8 @@ class StepTrackingService : Service(), SensorEventListener2 {
         // while the screen is off / phone is locked).
         stepCounterSensor = sm.getDefaultSensor(Sensor.TYPE_STEP_COUNTER, true)
             ?: sm.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
-        stepCounterSensor?.let { sm.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL, 1_000_000) }
+        // maxReportLatency 0: report each step as it happens instead of batching for up to 1 s.
+        stepCounterSensor?.let { sm.registerListener(this, it, SensorManager.SENSOR_DELAY_FASTEST, 0) }
 
         // Fallback only: the step detector is NOT combined with the counter any more
         // (doing so double counted and let rejected detector steps through).

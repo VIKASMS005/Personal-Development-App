@@ -34,10 +34,14 @@ object StepRepository {
     private const val KEY_CURRENT_UID = "grow_current_uid"
     private const val KEY_GOAL = "grow_daily_step_goal"
 
-    /** How long new steps wait for validation before being shown. */
-    private const val VALIDATION_WINDOW_NANOS = 4_000_000_000L
-    /** Accelerometer lead-in before the first pending step (hardware counters report late). */
-    private const val VALIDATION_LEAD_IN_NANOS = 3_000_000_000L
+    /**
+     * How long new steps wait for validation before being shown. Kept short so the count
+     * moves every step or two; the validator still judges several seconds of motion because
+     * it looks back over the lead-in below.
+     */
+    private const val VALIDATION_WINDOW_NANOS = 1_000_000_000L
+    /** Accelerometer history judged before the first pending step (hardware counters report late). */
+    private const val VALIDATION_LEAD_IN_NANOS = 4_000_000_000L
 
     data class Snapshot(val date: String, val steps: Long, val goal: Int)
 
