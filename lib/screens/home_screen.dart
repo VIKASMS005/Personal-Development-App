@@ -591,8 +591,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   Expanded(
                     child: _CompactModuleTile(
                       title: 'Finance & Budget',
-                      // This calendar year's spending, labelled with the year.
-                      subtitle: '${NumberFormat.currency(symbol: '₹', decimalDigits: 0).format(finance.expenseForYear(DateTime.now().year))} in ${DateTime.now().year}',
+                      // This calendar year's spending.
+                      subtitle: NumberFormat.currency(symbol: '₹', decimalDigits: 0)
+                          .format(finance.expenseForYear(DateTime.now().year)),
                       icon: Icons.account_balance_wallet_rounded,
                       color: AppColors.finance,
                       badgeText: finance.transactions.isNotEmpty ? 'Active' : '0',

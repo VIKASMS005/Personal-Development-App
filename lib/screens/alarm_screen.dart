@@ -98,7 +98,7 @@ class _AlarmScreenState extends State<AlarmScreen>
   Widget? _buildFab(AuthProvider auth, ReminderProvider reminderProv, AlarmProvider alarmProv) {
     if (_tabController.index == 0) {
       return FloatingActionButton(
-        backgroundColor: AppColors.alarm,
+        backgroundColor: AppColors.primary,
         foregroundColor: Colors.white,
         tooltip: 'Add New Alarm',
         child: const Icon(Icons.alarm_add_rounded),
@@ -106,7 +106,7 @@ class _AlarmScreenState extends State<AlarmScreen>
       );
     } else if (_tabController.index == 3) {
       return FloatingActionButton(
-        backgroundColor: AppColors.alarm,
+        backgroundColor: AppColors.primary,
         foregroundColor: Colors.white,
         tooltip: 'Add New Reminder',
         child: const Icon(Icons.add_alert_rounded),
@@ -136,10 +136,10 @@ class _AlarmScreenState extends State<AlarmScreen>
               Container(
                 padding: const EdgeInsets.all(24),
                 decoration: BoxDecoration(
-                  color: AppColors.alarm.withValues(alpha: 0.12),
+                  color: AppColors.primary.withValues(alpha: 0.12),
                   shape: BoxShape.circle,
                 ),
-                child: const Icon(Icons.alarm_outlined, size: 52, color: AppColors.alarm),
+                child: const Icon(Icons.alarm_outlined, size: 52, color: AppColors.primary),
               ),
               const SizedBox(height: 16),
               Text(
@@ -159,7 +159,7 @@ class _AlarmScreenState extends State<AlarmScreen>
                 icon: const Icon(Icons.alarm_add_rounded),
                 label: const Text('Add Alarm'),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.alarm,
+                  backgroundColor: AppColors.primary,
                   foregroundColor: Colors.white,
                 ),
                 onPressed: () => _showAlarmDialog(context, auth, alarmProv),
@@ -189,14 +189,14 @@ class _AlarmScreenState extends State<AlarmScreen>
                     Container(
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(
-                        color: (alarm.isEnabled ? AppColors.alarm : theme.dividerColor)
+                        color: (alarm.isEnabled ? AppColors.primary : theme.dividerColor)
                             .withValues(alpha: 0.15),
                         shape: BoxShape.circle,
                       ),
                       child: Icon(
                         Icons.alarm_rounded,
                         color: alarm.isEnabled
-                            ? AppColors.alarm
+                            ? AppColors.primary
                             : theme.colorScheme.onSurface.withValues(alpha: 0.4),
                         size: 24,
                       ),
@@ -233,7 +233,7 @@ class _AlarmScreenState extends State<AlarmScreen>
                                   fontSize: 12,
                                   fontWeight: FontWeight.w700,
                                   color: alarm.isEnabled
-                                      ? AppColors.alarm
+                                      ? AppColors.primary
                                       : theme.colorScheme.onSurface.withValues(alpha: 0.5),
                                 ),
                               ),
@@ -260,7 +260,7 @@ class _AlarmScreenState extends State<AlarmScreen>
                           scale: 0.85,
                           child: Switch(
                             value: alarm.isEnabled,
-                            activeTrackColor: AppColors.alarm.withValues(alpha: 0.5),
+                            activeTrackColor: AppColors.primary.withValues(alpha: 0.5),
                             onChanged: (_) async {
                               await alarmProv.toggleAlarm(alarm);
                             },
@@ -414,14 +414,14 @@ class _AlarmScreenState extends State<AlarmScreen>
                       child: Container(
                         padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 16),
                         decoration: BoxDecoration(
-                          color: AppColors.alarm.withValues(alpha: 0.1),
+                          color: AppColors.primary.withValues(alpha: 0.1),
                           borderRadius: BorderRadius.circular(16),
-                          border: Border.all(color: AppColors.alarm.withValues(alpha: 0.3)),
+                          border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
                         ),
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            const Icon(Icons.access_time_rounded, color: AppColors.alarm, size: 28),
+                            const Icon(Icons.access_time_rounded, color: AppColors.primary, size: 28),
                             const SizedBox(width: 12),
                             Text(
                               AppTimePicker.format(modalCtx, selectedTime),
@@ -465,7 +465,7 @@ class _AlarmScreenState extends State<AlarmScreen>
                         return FilterChip(
                           label: Text(dayLabels[idx]),
                           selected: isSelected,
-                          selectedColor: AppColors.alarm,
+                          selectedColor: AppColors.primary,
                           labelStyle: TextStyle(
                             color: isSelected ? Colors.white : theme.colorScheme.onSurface,
                             fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
@@ -516,7 +516,7 @@ class _AlarmScreenState extends State<AlarmScreen>
                       height: 50,
                       child: ElevatedButton.icon(
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: AppColors.alarm,
+                          backgroundColor: AppColors.primary,
                           foregroundColor: Colors.white,
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                         ),
@@ -879,7 +879,7 @@ class _AlarmScreenState extends State<AlarmScreen>
             color: theme.colorScheme.surface,
             borderRadius: BorderRadius.circular(24),
             border: Border.all(
-              color: _stopwatch.isRunning ? AppColors.secondary : theme.dividerColor,
+              color: _stopwatch.isRunning ? AppColors.primary : theme.dividerColor,
               width: 2,
             ),
           ),
@@ -900,7 +900,7 @@ class _AlarmScreenState extends State<AlarmScreen>
           children: [
             ElevatedButton.icon(
               style: ElevatedButton.styleFrom(
-                backgroundColor: _stopwatch.isRunning ? AppColors.error : AppColors.secondary,
+                backgroundColor: _stopwatch.isRunning ? AppColors.error : AppColors.primary,
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
               ),
@@ -967,7 +967,7 @@ class _AlarmScreenState extends State<AlarmScreen>
                                 fontFamily: 'monospace',
                                 fontSize: 16,
                                 fontWeight: FontWeight.w700,
-                                color: AppColors.secondary,
+                                color: AppColors.primary,
                               ),
                             ),
                           ],
@@ -1010,7 +1010,7 @@ class _AlarmScreenState extends State<AlarmScreen>
                 child: FilterChip(
                   label: Text(filterLabels[i]),
                   selected: isSelected,
-                  selectedColor: AppColors.alarm,
+                  selectedColor: AppColors.primary,
                   labelStyle: TextStyle(
                     color: isSelected ? Colors.white : null,
                     fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
@@ -1036,13 +1036,13 @@ class _AlarmScreenState extends State<AlarmScreen>
                         Container(
                           padding: const EdgeInsets.all(20),
                           decoration: BoxDecoration(
-                            color: AppColors.alarm.withValues(alpha: 0.12),
+                            color: AppColors.primary.withValues(alpha: 0.12),
                             shape: BoxShape.circle,
                           ),
                           child: const Icon(
                             Icons.notifications_active_outlined,
                             size: 48,
-                            color: AppColors.alarm,
+                            color: AppColors.primary,
                           ),
                         ),
                         const SizedBox(height: 16),
@@ -1065,7 +1065,7 @@ class _AlarmScreenState extends State<AlarmScreen>
                           icon: const Icon(Icons.add_alert_rounded),
                           label: const Text('Add Reminder'),
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: AppColors.alarm,
+                            backgroundColor: AppColors.primary,
                             foregroundColor: Colors.white,
                           ),
                           onPressed: () async {
@@ -1088,7 +1088,7 @@ class _AlarmScreenState extends State<AlarmScreen>
                     final isPast = r.dateTime.isBefore(DateTime.now()) && !r.isCompleted;
                     final isTask = r.id.startsWith('task_');
 
-                    Color catColor = AppColors.alarm;
+                    Color catColor = AppColors.primary;
                     IconData catIcon = Icons.notifications_active_rounded;
                     if (r.category == 'Work') {
                       catColor = AppColors.secondary;
@@ -1211,7 +1211,7 @@ class _AlarmScreenState extends State<AlarmScreen>
                                   Icon(
                                     Icons.access_time_rounded,
                                     size: 13,
-                                    color: isPast ? AppColors.error : AppColors.alarm,
+                                    color: isPast ? AppColors.error : AppColors.primary,
                                   ),
                                   const SizedBox(width: 4),
                                   Text(

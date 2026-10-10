@@ -221,7 +221,7 @@ class _ReminderFormState extends State<ReminderForm> {
                         ),
                         child: Row(
                           children: [
-                            const Icon(Icons.calendar_today_rounded, color: AppColors.alarm, size: 20),
+                            const Icon(Icons.calendar_today_rounded, color: AppColors.primary, size: 20),
                             const SizedBox(width: 8),
                             Expanded(
                               child: Column(
@@ -263,7 +263,7 @@ class _ReminderFormState extends State<ReminderForm> {
                         ),
                         child: Row(
                           children: [
-                            const Icon(Icons.access_time_rounded, color: AppColors.alarm, size: 20),
+                            const Icon(Icons.access_time_rounded, color: AppColors.primary, size: 20),
                             const SizedBox(width: 8),
                             Expanded(
                               child: Column(
@@ -303,9 +303,9 @@ class _ReminderFormState extends State<ReminderForm> {
                   return ChoiceChip(
                     label: Text(cat),
                     selected: isSelected,
-                    selectedColor: AppColors.alarm.withValues(alpha: 0.15),
+                    selectedColor: AppColors.primary.withValues(alpha: 0.15),
                     labelStyle: TextStyle(
-                      color: isSelected ? AppColors.alarm : null,
+                      color: isSelected ? AppColors.primary : null,
                       fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
                     ),
                     onSelected: (val) {
@@ -323,7 +323,7 @@ class _ReminderFormState extends State<ReminderForm> {
                   icon: const Icon(Icons.notifications_active_rounded),
                   label: Text(widget.initialReminder != null ? 'Update Reminder' : 'Set Reminder Alert'),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.alarm,
+                    backgroundColor: AppColors.primary,
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(vertical: 14),
                   ),
