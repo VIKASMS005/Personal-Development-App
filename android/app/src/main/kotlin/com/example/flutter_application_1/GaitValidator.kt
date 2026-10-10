@@ -56,7 +56,21 @@ class GaitValidator(private val capacity: Int = 1024) {
         const val MIN_CADENCE_HZ = 0.8
         const val MAX_CADENCE_HZ = 3.8
         /** Below this normalized autocorrelation there is no repeating gait pattern. */
-        const val MIN_PERIODICITY = 0.25f
+        const val MIN_PERIODICITY = 0.45f
+        /**
+         * A rhythm peak must rise at least this much above the lowest autocorrelation at
+         * shorter lags. Slow arm/body sway while sitting with the phone in hand makes the
+         * autocorrelation high at every short lag, and a small ripple on that slope used to be
+         * taken for a step rhythm (real phone report: +6 steps every few seconds while seated).
+         */
+        const val MIN_PEAK_PROMINENCE = 0.3f
+        /** Below this RMS (m/s²) the motion is weak, so a clearer rhythm is required. */
+        const val WEAK_MOTION_RMS = 0.6f
+        const val MIN_PERIODICITY_WEAK_MOTION = 0.6f
+        /** Autocorrelation needed at the stride (2-step) lag. */
+        const val MIN_STRIDE_PERIODICITY = 0.35f
+        /** Movement slower than this (Hz) is posture/sway, not stepping; it is filtered out. */
+        const val HIGH_PASS_HZ = 0.5
         /** Physically impossible sustained step rate (elite sprint is ~4.5–5/s). */
         const val MAX_STEP_RATE_HZ = 5.0
         /** Hardware counters often release a batch of steps they held while confirming a walk. */
@@ -122,7 +136,7 @@ class GaitValidator(private val capacity: Int = 1024) {
         val signal = resample(tList, mList)
         val mean = signal.average().toFloat()
         for (i in signal.indices) signal[i] -= mean
-        val smooth = movingAverage(signal, 3)
+        val smooth = movingAverage(highPass(signal), 3)
         var sq = 0.0
         for (v in smooth) sq += v * v
         val rms = sqrt(sq / smooth.size).toFloat()
@@ -133,15 +147,20 @@ class GaitValidator(private val capacity: Int = 1024) {
         val minLag = (0.08 * RESAMPLE_HZ).toInt()
         val maxLag = min((1.3 * RESAMPLE_HZ).toInt(), smooth.size / 2)
         if (maxLag <= minLag + 2) return Verdict(steps, Reason.INSUFFICIENT_DATA_TRUSTED, rms = rms)
-        val ac = autocorrelation(smooth, maxLag)
+        // Computed further out so the stride (two steps) can be checked too.
+        val ac = autocorrelation(smooth, min(2 * maxLag + 3, smooth.size / 2))
 
         // Local maxima, then the strongest one; prefer the shortest lag whose peak is almost
         // as strong (the step period rather than the stride = 2 steps).
         var bestLag = -1
         var bestVal = -1f
         val peaks = ArrayList<Int>()
+        var lowestSoFar = ac[minLag]
         for (lag in minLag + 1 until maxLag) {
-            if (ac[lag] > ac[lag - 1] && ac[lag] >= ac[lag + 1] && ac[lag] > 0f) {
+            lowestSoFar = min(lowestSoFar, ac[lag])
+            if (ac[lag] > ac[lag - 1] && ac[lag] >= ac[lag + 1] && ac[lag] > 0f &&
+                ac[lag] - lowestSoFar >= MIN_PEAK_PROMINENCE
+            ) {
                 peaks.add(lag)
                 if (ac[lag] > bestVal) { bestVal = ac[lag]; bestLag = lag }
             }
@@ -160,8 +179,21 @@ class GaitValidator(private val capacity: Int = 1024) {
             // gait range, which is why the *shortest* strong period is used, not any peak.)
             return Verdict(0L, Reason.TOO_FAST_SHAKING, cadence, periodicity, rms)
         }
-        if (periodicity < MIN_PERIODICITY) {
+        // Weak motion (phone held while sitting, small sways) must show a clearer rhythm
+        // than vigorous walking before it counts.
+        val needed = if (rms < WEAK_MOTION_RMS) MIN_PERIODICITY_WEAK_MOTION else MIN_PERIODICITY
+        if (periodicity < needed) {
             return Verdict(0L, Reason.NO_RHYTHM, cadence, periodicity, rms)
+        }
+        // Walking repeats every stride (two steps) as well as every step. Taps, scrolls and
+        // sways that happen to line up once do not.
+        val strideLag = 2 * stepLag
+        if (strideLag + 2 < ac.size) {
+            var stride = -1f
+            for (l in strideLag - 2..strideLag + 2) stride = max(stride, ac[l])
+            if (stride < MIN_STRIDE_PERIODICITY) {
+                return Verdict(0L, Reason.NO_RHYTHM, cadence, stride, rms)
+            }
         }
         return Verdict(steps, Reason.ACCEPTED, cadence, periodicity, rms)
     }
@@ -180,6 +212,24 @@ class GaitValidator(private val capacity: Int = 1024) {
             out[i] = (m[j] + (m[j + 1] - m[j]) * frac).toFloat()
         }
         return out
+    }
+
+    /**
+     * Zero-phase first-order high-pass (forward + backward) at [HIGH_PASS_HZ]. Unlike a
+     * moving-average detrend it has no notches, so slow walking (~1–1.5 steps/s) passes intact.
+     */
+    private fun highPass(x: FloatArray): FloatArray {
+        val rc = 1.0 / (2 * Math.PI * HIGH_PASS_HZ)
+        val dt = 1.0 / RESAMPLE_HZ
+        val a = (rc / (rc + dt)).toFloat()
+        fun pass(input: FloatArray): FloatArray {
+            val out = FloatArray(input.size)
+            if (input.isEmpty()) return out
+            for (i in 1 until input.size) out[i] = a * (out[i - 1] + input[i] - input[i - 1])
+            return out
+        }
+        val forward = pass(x)
+        return pass(forward.reversedArray()).reversedArray()
     }
 
     private fun movingAverage(x: FloatArray, w: Int): FloatArray {

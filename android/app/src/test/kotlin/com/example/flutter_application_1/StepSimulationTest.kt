@@ -67,17 +67,41 @@ private fun feed(
     return end
 }
 
-/** Gait model: one impact per step with harmonics, horizontal sway at stride rate. */
+/**
+ * Gait model: one impact per step with harmonics, horizontal sway at stride rate.
+ * Deliberately irregular, like real walking: each step's duration varies (~6%), each step's
+ * strength varies (±30%), left/right steps differ, plus slow body sway.
+ */
 private fun gait(cadence: Double, amp: Double, impact: Double, rnd: Random): Pair<(Double) -> Double, (Double) -> Double> {
-    val ph = rnd.nextDouble(0.0, 2 * PI)
-    val jitter = rnd.nextDouble(0.97, 1.03)
-    val f = cadence * jitter
-    val vert = { s: Double ->
-        val p = 2 * PI * f * s + ph
-        val phase = ((f * s) % 1.0)
-        amp * sin(p) + 0.4 * amp * sin(2 * p + 0.7) + impact * exp(-phase * 25.0)
+    val f0 = cadence * rnd.nextDouble(0.97, 1.03)
+    val starts = ArrayList<Double>(); val durs = ArrayList<Double>(); val gains = ArrayList<Double>()
+    var t = -rnd.nextDouble(0.0, 1.0 / f0)
+    var i = 0
+    while (t < 30.0) {
+        val d = (1.0 / f0) * (1.0 + 0.06 * rnd.nextDouble(-1.0, 1.0) * 1.7 / 1.7)
+        starts.add(t); durs.add(d)
+        gains.add((1.0 + rnd.nextDouble(-0.3, 0.3)) * (if (i % 2 == 0) 1.0 else 0.8))
+        t += d; i++
     }
-    val hor = { s: Double -> 0.35 * amp * sin(PI * f * s + ph) }
+    val swayF = rnd.nextDouble(0.2, 0.5); val swayA = 0.3 * amp; val swayP = rnd.nextDouble(0.0, 2 * PI)
+    fun stepAt(s: Double): Int {
+        var lo = 0; var hi = starts.size - 1
+        while (lo < hi) { val mid = (lo + hi + 1) / 2; if (starts[mid] <= s) lo = mid else hi = mid - 1 }
+        return lo
+    }
+    val vert = { s: Double ->
+        val k = stepAt(s)
+        val phase = ((s - starts[k]) / durs[k]).coerceIn(0.0, 1.0)
+        val p = 2 * PI * phase
+        val g = gains[k]
+        g * (amp * sin(p) + 0.4 * amp * sin(2 * p + 0.7) + impact * exp(-phase * 25.0)) +
+            swayA * sin(2 * PI * swayF * s + swayP)
+    }
+    val hor = { s: Double ->
+        val k = stepAt(s)
+        val phase = ((s - starts[k]) / durs[k]).coerceIn(0.0, 1.0)
+        0.35 * amp * sin(PI * (phase + (k % 2)))
+    }
     return vert to hor
 }
 
@@ -85,7 +109,7 @@ private data class Condition(val name: String, val cadence: Double, val amp: Dou
 
 fun main(args: Array<String>) {
     val rnd = Random(args.firstOrNull()?.toIntOrNull() ?: 42)
-    val window = 6.0 // seconds of accelerometer data the service judges (pending window + lead-in)
+    val window = 5.0 // seconds of accelerometer data the service judges (1 s pending window + 4 s lead-in)
 
     // ── 1. Walking / running in different carry positions must be ACCEPTED ──────────
     val speeds = listOf(
@@ -99,6 +123,7 @@ fun main(args: Array<String>) {
 
     for (sp in speeds) for ((pos, scale) in positions) {
         var accepted = 0
+        var minPer = 9f; var minRms = 99f
         val trials = 20
         for (trial in 0 until trials) {
             val v = GaitValidator()
@@ -107,23 +132,26 @@ fun main(args: Array<String>) {
             val steps = (sp.cadence * 4).toLong() // 4 s worth of pending steps
             val verdict = v.evaluate(steps, end - (window * SEC).toLong(), end)
             if (verdict.accepted == steps) accepted++
+            minPer = minOf(minPer, verdict.periodicity); minRms = minOf(minRms, verdict.rms)
         }
-        check("${sp.name} / $pos counted", accepted >= trials - 1, "$accepted/$trials windows accepted")
+        check("${sp.name} / $pos counted", accepted >= trials - 1, "$accepted/$trials windows accepted (min periodicity %.2f, min rms %.2f)".format(minPer, minRms))
     }
 
     // ── 2. Non-walking motion must be REJECTED ──────────────────────────────────────
     fun rejectRate(name: String, trials: Int = 20, make: (Random) -> Pair<(Double) -> Double, (Double) -> Double>, noise: Double, minRejected: Int = trials - 1) {
         var rejected = 0
         var lastReason = ""
+        var lastAccepted = ""
         for (trial in 0 until trials) {
             val v = GaitValidator()
             val (vert, hor) = make(rnd)
             val end = feed(v, rnd, 5 * SEC, window, noise, vert, hor)
             val verdict = v.evaluate(8, end - (window * SEC).toLong(), end)
             if (verdict.accepted == 0L) rejected++
+            else lastAccepted = "accepted: cadence=%.2f per=%.2f rms=%.2f".format(verdict.cadenceHz, verdict.periodicity, verdict.rms)
             lastReason = verdict.reason.name
         }
-        check("$name rejected", rejected >= minRejected, "$rejected/$trials rejected (e.g. $lastReason)")
+        check("$name rejected", rejected >= minRejected, "$rejected/$trials rejected (e.g. $lastReason) $lastAccepted")
     }
 
     rejectRate("fast hand shaking (5–7 Hz)", make = { r ->
@@ -147,6 +175,24 @@ fun main(args: Array<String>) {
         val f = r.nextDouble(12.0, 20.0)
         ({ s: Double -> 0.6 * sin(2 * PI * f * s) }) to ({ s: Double -> 0.3 * sin(2 * PI * f * 1.3 * s) })
     }, noise = 0.1)
+
+    // Sitting and using the phone in your hand (reported on a real phone: +6 steps every
+    // few seconds while seated). Slow arm/body sway, small taps and scrolls, no gait rhythm.
+    rejectRate("sitting, phone in hand: slow sway + taps", trials = 40, make = { r ->
+        val f1 = r.nextDouble(0.15, 0.6); val a1 = r.nextDouble(0.3, 1.5)
+        val f2 = r.nextDouble(0.1, 0.4); val a2 = r.nextDouble(0.2, 0.8)
+        val p1 = r.nextDouble(0.0, 6.3); val p2 = r.nextDouble(0.0, 6.3)
+        val taps = List(r.nextInt(3, 12)) { Pair(r.nextDouble(0.0, 5.0), r.nextDouble(0.3, 1.8)) }
+        ({ s: Double -> a1 * sin(2 * PI * f1 * s + p1) + a2 * sin(2 * PI * f2 * s + p2) +
+            taps.sumOf { (c, a) -> a * exp(-((s - c) / 0.04).let { it * it }) } }) to
+            ({ s: Double -> 0.8 * a1 * cos(2 * PI * f1 * s + p1) })
+    }, noise = 0.15, minRejected = 38)
+    rejectRate("sitting, phone in hand: fidgeting / shifting position", trials = 40, make = { r ->
+        val bumps = List(r.nextInt(2, 6)) { Triple(r.nextDouble(0.0, 5.0), r.nextDouble(0.15, 0.6), r.nextDouble(-2.5, 2.5)) }
+        val f1 = r.nextDouble(0.1, 0.5); val a1 = r.nextDouble(0.2, 1.0)
+        ({ s: Double -> a1 * sin(2 * PI * f1 * s) + bumps.sumOf { (c, w, a) -> a * exp(-((s - c) / w).let { it * it }) } }) to
+            ({ s: Double -> bumps.sumOf { (c, w, a) -> 0.5 * a * exp(-((s - c - 0.2) / w).let { it * it }) } })
+    }, noise = 0.2, minRejected = 38)
 
     // ── 3. Screen off / phone asleep: no accelerometer data → hardware count trusted ──
     run {
