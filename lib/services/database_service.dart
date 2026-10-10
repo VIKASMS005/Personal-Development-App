@@ -123,6 +123,9 @@ class DatabaseService {
         try {
           await db.execute('ALTER TABLE todos ADD COLUMN completed_at TEXT');
         } catch (_) {}
+        try {
+          await db.execute('ALTER TABLE habits ADD COLUMN created_at TEXT');
+        } catch (_) {}
         // Completed items saved before completed_at existed: their last update
         // is the best record of when they were completed.
         try {
@@ -264,6 +267,7 @@ class DatabaseService {
         frequency TEXT,
         history_json TEXT,
         streak INTEGER DEFAULT 0,
+        created_at TEXT,
         updated_at TEXT,
         is_synced INTEGER DEFAULT 0,
         is_deleted INTEGER DEFAULT 0
@@ -1247,6 +1251,7 @@ class DatabaseService {
         'frequency',
         'history_json',
         'streak',
+        'created_at',
         'updated_at',
         'is_synced',
         'is_deleted'
@@ -1387,6 +1392,18 @@ class DatabaseService {
           final row = sanitize(table, raw);
           if (row == null) continue;
 
+          // Daily records must name a real day that has already happened,
+          // and a transaction needs a readable date.
+          if (table == 'step_records' || table == 'screen_time_records') {
+            final day = DateTime.tryParse('${row['date']}');
+            final n = DateTime.now();
+            if (day == null || day.isAfter(DateTime(n.year, n.month, n.day))) continue;
+          }
+          if (table == 'finance_transactions' &&
+              DateTime.tryParse('${row['date'] ?? ''}') == null) {
+            continue;
+          }
+
           if (table == 'step_records') {
             // Today's count belongs to the live native counter.
             final n = DateTime.now();
@@ -1438,8 +1455,12 @@ class DatabaseService {
               final theirs = updatedAt(row);
               if (mine != null && (theirs == null || theirs.isBefore(mine))) continue;
             }
+            await txn.insert(table, row, conflictAlgorithm: ConflictAlgorithm.replace);
+            continue;
           }
-          await txn.insert(table, row, conflictAlgorithm: ConflictAlgorithm.replace);
+          // No edit time (alarms, sessions): the copy on the phone may be
+          // newer, so a backup only adds records that are missing.
+          await txn.insert(table, row, conflictAlgorithm: ConflictAlgorithm.ignore);
         }
       }
 

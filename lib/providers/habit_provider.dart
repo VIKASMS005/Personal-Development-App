@@ -45,7 +45,8 @@ class HabitProvider extends ChangeNotifier {
 
   Future<void> addHabit(Habit habit) async {
     final accurateStreak = Habit.streakFor(habit.frequency, habit.history);
-    final newHabit = habit.copyWith(streak: accurateStreak);
+    final newHabit = habit.copyWith(
+        streak: accurateStreak, createdAt: habit.createdAt ?? DateTime.now());
     _habits.insert(0, newHabit);
     notifyListeners();
     await _db.upsertHabit(newHabit);

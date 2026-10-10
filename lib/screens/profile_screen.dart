@@ -175,6 +175,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       context.read<CalendarProvider>().loadEvents(uid);
       context.read<TimetableProvider>().loadSlots(uid);
       context.read<StepProvider>().refreshStepData(uid);
+      context.read<ScreenTimeProvider>().loadScreenTime();
       // Restored reminders and alarms also need their notifications.
       reminders.loadReminders(uid).then((_) => reminders.rescheduleUpcoming());
       alarms.loadAlarms(uid).then((_) => alarms.rescheduleAll());
@@ -209,6 +210,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         context.read<ReminderProvider>().clear();
         context.read<AlarmProvider>().clear();
         context.read<StepProvider>().clear();
+        context.read<TaskTrackerProvider>().cancel();
 
         context.read<ProfileProvider>().loadProfile(uid);
         context.read<TodoProvider>().loadTodos(uid);
@@ -221,6 +223,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         context.read<ReminderProvider>().loadReminders(uid);
         context.read<AlarmProvider>().loadAlarms(uid);
         context.read<StepProvider>().loadStepData(uid);
+        context.read<ScreenTimeProvider>().loadScreenTime();
 
         AppSnack.show(context, 'All local data has been reset');
       }

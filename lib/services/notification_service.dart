@@ -22,6 +22,15 @@ class NotificationService {
     return hash & 0x7FFFFFFF;
   }
 
+  /// Id of an alarm's k-th follow-up (1-3 = automatic snoozes, 4 = missed
+  /// notice). Wraps so it always fits Android's 32-bit notification id.
+  static int followUpId(int id, int k) => (id + k * 100000) % 0x7FFFFFFF;
+
+  /// Payload for an alarm notification: `alarmv2:<snooze>:<alarm id>:<title>`.
+  /// The title goes last so a ':' in it can't break parsing.
+  static String alarmPayload(String alarmKey, String title, int snoozeCount) =>
+      'alarmv2:$snoozeCount:$alarmKey:$title';
+
   static final FlutterLocalNotificationsPlugin _plugin =
       FlutterLocalNotificationsPlugin();
 
@@ -79,7 +88,17 @@ class NotificationService {
           stopRingtone();
           final reminderId = payload.substring('reminder:'.length);
           onReminderTapped?.call(reminderId);
+        } else if (payload.startsWith('alarmv2:')) {
+          final rest = payload.substring('alarmv2:'.length);
+          final a = rest.indexOf(':');
+          final b = a < 0 ? -1 : rest.indexOf(':', a + 1);
+          if (b > 0) {
+            final snoozeCount = int.tryParse(rest.substring(0, a)) ?? 0;
+            onAlarmTriggered?.call(
+                rest.substring(a + 1, b), rest.substring(b + 1), snoozeCount);
+          }
         } else if (payload.startsWith('alarm:')) {
+          // Older format, still on notifications scheduled before an update.
           // Format: 'alarm:$alarmId:$title:$snoozeCount'
           final parts = payload.split(':');
           if (parts.length >= 4) {
@@ -334,7 +353,9 @@ class NotificationService {
     String body = 'Time to wake up and start your routine!',
     DateTimeComponents? matchDateTimeComponents,
     int initialSnoozeCount = 0,
+    String? alarmKey,
   }) async {
+    final key = alarmKey ?? id.toString();
     final androidDetails = AndroidNotificationDetails(
       _alarmChannelId,
       _alarmChannelName,
@@ -366,7 +387,7 @@ class NotificationService {
       scheduledDate: t1,
       details: androidDetails,
       isAlarm: true,
-      payload: 'alarm:$id:$title:$initialSnoozeCount',
+      payload: alarmPayload(key, title, initialSnoozeCount),
       matchDateTimeComponents: matchDateTimeComponents,
     );
 
@@ -375,37 +396,37 @@ class NotificationService {
       // 2. Snooze 1 of 3 (5 minutes later)
       final t2 = t1.add(const Duration(minutes: 5));
       await _scheduleZoned(
-        id: id + 100000,
+        id: followUpId(id, 1),
         title: '⏰ (Snooze 1/3) $title',
         body: 'Alarm snooze 1 of 3: $body',
         scheduledDate: t2,
         details: androidDetails,
         isAlarm: true,
-        payload: 'alarm:$id:$title:1',
+        payload: alarmPayload(key, title, 1),
       );
 
       // 3. Snooze 2 of 3 (10 minutes later)
       final t3 = t1.add(const Duration(minutes: 10));
       await _scheduleZoned(
-        id: id + 200000,
+        id: followUpId(id, 2),
         title: '⏰ (Snooze 2/3) $title',
         body: 'Alarm snooze 2 of 3: $body',
         scheduledDate: t3,
         details: androidDetails,
         isAlarm: true,
-        payload: 'alarm:$id:$title:2',
+        payload: alarmPayload(key, title, 2),
       );
 
       // 4. Snooze 3 of 3 (15 minutes later - Final Snooze)
       final t4 = t1.add(const Duration(minutes: 15));
       await _scheduleZoned(
-        id: id + 300000,
+        id: followUpId(id, 3),
         title: '⏰ (Snooze 3/3 - Final) $title',
         body: 'Final alarm! No more snoozes remaining.',
         scheduledDate: t4,
         details: androidDetails,
         isAlarm: true,
-        payload: 'alarm:$id:$title:3',
+        payload: alarmPayload(key, title, 3),
       );
 
       // 5. Auto-off & Missed Alarm Notification (20 minutes later if user never turned it off)
@@ -422,7 +443,7 @@ class NotificationService {
         visibility: NotificationVisibility.public,
       );
       await _scheduleZoned(
-        id: id + 400000,
+        id: followUpId(id, 4),
         title: '⏰ Missed Alarm: $title',
         body: 'Alarm rang 3 times and was automatically turned off.',
         scheduledDate: t5,
@@ -434,10 +455,15 @@ class NotificationService {
 
   static Future<void> cancelAlarm(int id) async {
     await _plugin.cancel(id);
-    await _plugin.cancel(id + 100000);
-    await _plugin.cancel(id + 200000);
-    await _plugin.cancel(id + 300000);
-    await _plugin.cancel(id + 400000);
+    await cancelAlarmFollowUps(id);
+  }
+
+  /// Cancels only the automatic snoozes and the missed notice that follow one
+  /// ring, leaving a repeating alarm's weekly schedule in place.
+  static Future<void> cancelAlarmFollowUps(int id) async {
+    for (int k = 1; k <= 4; k++) {
+      await _plugin.cancel(followUpId(id, k));
+    }
   }
 
   static Future<void> sendMissedAlarmNotification({
@@ -457,7 +483,7 @@ class NotificationService {
       visibility: NotificationVisibility.public,
     );
     await _plugin.show(
-      id + 400000,
+      followUpId(id, 4),
       '⏰ Missed Alarm: $title',
       'Alarm for $timeStr was missed after 3 snoozes.',
       NotificationDetails(android: missedDetails),

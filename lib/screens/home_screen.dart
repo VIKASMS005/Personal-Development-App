@@ -57,7 +57,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (!mounted) return;
       final alarms = context.read<AlarmProvider>().alarms;
       final alarm = alarms.firstWhere(
-        (a) => a.id == alarmId || NotificationService.stableId(a.id).toString() == alarmId,
+        (a) =>
+            a.id == alarmId ||
+            NotificationService.stableId(a.id).toString() == alarmId ||
+            List.generate(7, (i) => i + 1).any((d) =>
+                NotificationService.stableId('${a.id}_day$d').toString() == alarmId),
         orElse: () => AlarmModel(
           id: alarmId,
           uid: context.read<AuthProvider>().uid ?? 'local_user',
@@ -73,6 +77,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final todoProvider = context.read<TodoProvider>();
     final reminderProvider = context.read<ReminderProvider>();
     reminderProvider.onTaskChanged = todoProvider.applySavedTodo;
+    todoProvider.onTodoDeleted = context.read<TaskTrackerProvider>().cancelIfTracking;
     final authProvider = context.read<AuthProvider>();
     todoProvider.onRemindersChanged =
         () => reminderProvider.loadReminders(authProvider.uid ?? 'local_user');
@@ -343,8 +348,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     // todos.todos includes both Tasks and Goals — using it would inflate the count.
     final pendingTodos = todos.scheduledTasks; // tasks only, not completed, not missed
     final activeHabits = habits.habits;
-    final todayStr = DateFormat('yyyy-MM-dd').format(DateTime.now());
-    final habitsDoneToday = activeHabits.where((h) => h.history[todayStr] == true).length;
+    // Weekly habits count as done for the whole week once done on any day.
+    final habitsDoneToday = activeHabits.where((h) => h.isDoneThisPeriod).length;
 
     // Today's progress is computed from the live provider data on every build.
     // (Rebuilding EngineProvider here notified this same screen again and kept
@@ -863,7 +868,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w900, letterSpacing: -0.5),
                       ),
                       Text(
-                        known ? 'Total screen on time today' : 'Usage access needed',
+                        known
+                            ? 'Total screen on time today'
+                            : (screenProv.hasPermission && screenProv.readFailed
+                                ? "Couldn't read screen time"
+                                : 'Usage access needed'),
                         style: TextStyle(fontSize: 11, color: theme.colorScheme.onSurface.withValues(alpha: 0.6)),
                       ),
                     ],

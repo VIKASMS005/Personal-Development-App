@@ -218,11 +218,17 @@ class _CalendarScreenState extends State<CalendarScreen> {
     final titleCtrl = TextEditingController();
     final now = DateTime.now();
 
+    final firstDate = DateTime(now.year, now.month, now.day - 30);
+    final lastDate = DateTime(now.year + 5, 12, 31);
+    // The picker asserts if the selected calendar day is outside its range.
+    final initialDate = _selectedDay.isBefore(firstDate)
+        ? firstDate
+        : (_selectedDay.isAfter(lastDate) ? lastDate : _selectedDay);
     final picked = await showDatePicker(
       context: context,
-      firstDate: now.subtract(const Duration(days: 30)),
-      lastDate: DateTime(now.year + 5),
-      initialDate: _selectedDay,
+      firstDate: firstDate,
+      lastDate: lastDate,
+      initialDate: initialDate,
     );
     if (picked == null || !mounted) return;
 
@@ -255,7 +261,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
       ),
     );
     final enteredName = name;
-    titleCtrl.dispose();
+    // The dialog's closing animation still uses the field for a moment.
+    Future.delayed(const Duration(milliseconds: 500), titleCtrl.dispose);
 
     if (enteredName == null || enteredName.isEmpty || !mounted) return;
 

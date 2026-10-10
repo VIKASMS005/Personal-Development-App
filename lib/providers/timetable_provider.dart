@@ -80,10 +80,11 @@ class TimetableProvider extends ChangeNotifier {
   Future<void> updateSlot(TimetableSlot slot) async {
     final idx = _slots.indexWhere((s) => s.id == slot.id);
     if (idx != -1) {
-      _slots[idx] = slot.copyWith(updatedAt: DateTime.now());
+      final saved = slot.copyWith(updatedAt: DateTime.now());
+      _slots[idx] = saved;
       _sortSlots();
       notifyListeners();
-      await _db.upsertTimetableSlot(_slots[idx]);
+      await _db.upsertTimetableSlot(saved);
     }
   }
 

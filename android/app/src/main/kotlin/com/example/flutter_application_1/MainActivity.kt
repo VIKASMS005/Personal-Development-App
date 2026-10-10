@@ -258,11 +258,21 @@ class MainActivity : FlutterFragmentActivity() {
     }
 
     /** Walks UsageEvents and reports each user-facing foreground session as (pkg, fromMs, toMs). */
-    private fun scanForegroundSessions(startMs: Long, endMs: Long, record: (String, Long, Long) -> Unit) {
+    private fun scanForegroundSessions(startMs: Long, endMs: Long, recordClamped: (String, Long, Long) -> Unit) {
         val usageStatsManager =
             getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
 
-        val events = usageStatsManager.queryEvents(startMs, endMs)
+        // Read from a few hours earlier so an app already open when the window
+        // starts (e.g. in use across midnight) is counted, then keep only the
+        // part of each session that falls inside [startMs, endMs].
+        val lookbackMs = 6L * 60 * 60 * 1000
+        fun record(pkg: String, from: Long, to: Long) {
+            val s = maxOf(from, startMs)
+            val e = minOf(to, endMs)
+            if (e > s) recordClamped(pkg, s, e)
+        }
+
+        val events = usageStatsManager.queryEvents(startMs - lookbackMs, endMs)
         val event = UsageEvents.Event()
 
         var currentForegroundPkg: String? = null

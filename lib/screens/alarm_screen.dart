@@ -1259,6 +1259,14 @@ class _AlarmScreenState extends State<AlarmScreen>
                                           pickedTime.hour,
                                           pickedTime.minute,
                                         );
+                                        if (!newDateTime.isAfter(DateTime.now())) {
+                                          if (context.mounted) {
+                                            ScaffoldMessenger.of(context).showSnackBar(
+                                              const SnackBar(content: Text('Pick a time in the future')),
+                                            );
+                                          }
+                                          return;
+                                        }
                                         await reminderProv.rescheduleReminder(r, newDateTime);
                                         if (context.mounted) {
                                           ScaffoldMessenger.of(context).clearSnackBars();
@@ -1328,6 +1336,14 @@ class _AlarmScreenState extends State<AlarmScreen>
                                           pickedTime.hour,
                                           pickedTime.minute,
                                         );
+                                        if (!newDateTime.isAfter(DateTime.now())) {
+                                          if (context.mounted) {
+                                            ScaffoldMessenger.of(context).showSnackBar(
+                                              const SnackBar(content: Text('Pick a time in the future')),
+                                            );
+                                          }
+                                          return;
+                                        }
                                         await reminderProv.rescheduleReminder(r, newDateTime);
                                       }
                                     }

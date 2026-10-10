@@ -11,6 +11,9 @@ class Habit {
   HabitFrequency frequency;
   Map<String, bool> history; // date -> done
   int streak;
+  /// When the habit was added. Null for habits saved before this existed;
+  /// days before it don't count as missed.
+  DateTime? createdAt;
   DateTime updatedAt;
   bool isSynced;
   bool isDeleted;
@@ -22,6 +25,7 @@ class Habit {
     this.frequency = HabitFrequency.daily,
     Map<String, bool>? history,
     this.streak = 0,
+    this.createdAt,
     DateTime? updatedAt,
     this.isSynced = false,
     this.isDeleted = false,
@@ -36,6 +40,7 @@ class Habit {
     HabitFrequency? frequency,
     Map<String, bool>? history,
     int? streak,
+    DateTime? createdAt,
     DateTime? updatedAt,
     bool? isSynced,
     bool? isDeleted,
@@ -47,6 +52,7 @@ class Habit {
       frequency: frequency ?? this.frequency,
       history: history ?? Map.from(this.history),
       streak: streak ?? this.streak,
+      createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       isSynced: isSynced ?? this.isSynced,
       isDeleted: isDeleted ?? this.isDeleted,
@@ -146,6 +152,7 @@ class Habit {
         'frequency': frequency.name,
         'history': history,
         'streak': streak,
+        'createdAt': createdAt?.toIso8601String(),
         'updatedAt': updatedAt.toIso8601String(),
         'isDeleted': isDeleted,
       };
@@ -157,6 +164,7 @@ class Habit {
         'frequency': frequency.name,
         'history_json': jsonEncode(history),
         'streak': streak,
+        'created_at': createdAt?.toIso8601String(),
         'updated_at': updatedAt.toIso8601String(),
         'is_synced': isSynced ? 1 : 0,
         'is_deleted': isDeleted ? 1 : 0,
@@ -191,6 +199,7 @@ class Habit {
       streak: (m['streak'] is num)
           ? (m['streak'] as num).toInt()
           : int.tryParse('${m['streak']}') ?? 0,
+      createdAt: DateTime.tryParse('${m['createdAt'] ?? ''}'),
       updatedAt: m['updatedAt'] != null
           ? DateTime.tryParse(m['updatedAt'].toString()) ?? DateTime.now()
           : DateTime.now(),
@@ -222,6 +231,7 @@ class Habit {
       streak: (m['streak'] is num)
           ? (m['streak'] as num).toInt()
           : int.tryParse('${m['streak']}') ?? 0,
+      createdAt: DateTime.tryParse('${m['created_at'] ?? ''}'),
       updatedAt: m['updated_at'] != null
           ? DateTime.tryParse(m['updated_at'].toString()) ?? DateTime.now()
           : DateTime.now(),

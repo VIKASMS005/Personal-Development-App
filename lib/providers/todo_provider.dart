@@ -16,6 +16,9 @@ class TodoProvider extends ChangeNotifier {
   /// Called after a task's reminder row was added, changed or removed, so the
   /// reminders list (and the in-app reminder ringer) doesn't keep a stale copy.
   void Function()? onRemindersChanged;
+
+  /// Lets the task timer stop when the task it is timing is deleted.
+  void Function(String id)? onTodoDeleted;
   List<TaskSession> get sessions => _sessions;
 
   // ── Tasks vs Goals Split ──────────────────────────────────────────────────
@@ -193,6 +196,7 @@ class TodoProvider extends ChangeNotifier {
 
   Future<void> deleteTodo(String id) async {
     _todos.removeWhere((t) => t.id == id);
+    onTodoDeleted?.call(id);
     notifyListeners();
     await NotificationService.cancel(NotificationService.stableId('task_$id'));
     await _db.deleteReminder('task_$id');

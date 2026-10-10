@@ -75,7 +75,11 @@ class ReminderProvider extends ChangeNotifier {
       // Wire up the auto-complete callback for reminder notifications
       NotificationService.onReminderTapped = (reminderId) {
         final idx = _reminders.indexWhere((r) => r.id == reminderId);
-        if (idx != -1 && !_reminders[idx].isCompleted) {
+        // Opening a task's reminder doesn't mean the task is done, so only
+        // plain reminders are marked complete by a tap.
+        if (idx != -1 &&
+            !_reminders[idx].isCompleted &&
+            !reminderId.startsWith('task_')) {
           toggleCompleted(_reminders[idx]);
         }
       };
@@ -157,12 +161,15 @@ class ReminderProvider extends ChangeNotifier {
         final matches = taskList.where((t) => t.id == taskId);
         if (matches.isNotEmpty) {
           final t = matches.first;
+          // Same rule as the task list: a missed task (past due + grace)
+          // cannot be completed from its reminder.
+          final completed = (r.isCompleted && !t.completed && !t.canComplete) ? false : r.isCompleted;
+          // Only the title, time and done state flow back. The reminder's
+          // description and category may be placeholders ('Task Reminder').
           final saved = t.copyWith(
             title: r.title,
-            description: r.description,
-            category: r.category,
             reminderDateTime: r.dateTime,
-            completed: r.isCompleted,
+            completed: completed,
             updatedAt: DateTime.now(),
           );
           await _db.upsertTodo(saved);

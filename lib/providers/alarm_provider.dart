@@ -160,6 +160,7 @@ class AlarmProvider extends ChangeNotifier {
         dateTime: alarmDt,
         body:
             'Time for ${alarm.label.isNotEmpty ? alarm.label : "your routine"}!',
+        alarmKey: alarm.id,
       );
     } else {
       // Recurring days of week (1=Mon..7=Sun)
@@ -179,6 +180,7 @@ class AlarmProvider extends ChangeNotifier {
           body:
               'Time for ${alarm.label.isNotEmpty ? alarm.label : "your routine"}!',
           matchDateTimeComponents: DateTimeComponents.dayOfWeekAndTime,
+          alarmKey: alarm.id,
         );
       }
     }

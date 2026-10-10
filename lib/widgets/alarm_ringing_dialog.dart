@@ -64,25 +64,34 @@ class _AlarmRingingDialogState extends State<AlarmRingingDialog>
     super.dispose();
   }
 
+  /// Stops what is still queued for this ring: the automatic snoozes, the
+  /// missed notice and any manual snooze. A repeating alarm keeps its weekly
+  /// schedule; a one-time alarm is switched off.
+  Future<void> _cancelPendingRings() async {
+    final id = widget.alarm.id;
+    await NotificationService.cancelAlarmFollowUps(NotificationService.stableId(id));
+    for (int day = 1; day <= 7; day++) {
+      await NotificationService.cancelAlarmFollowUps(
+          NotificationService.stableId('${id}_day$day'));
+    }
+    for (int s = 1; s <= 3; s++) {
+      await NotificationService.cancelAlarm(NotificationService.stableId('snooze_${id}_$s'));
+    }
+  }
+
+  void _switchOffIfOneTime() {
+    if (widget.alarm.daysOfWeek.isEmpty && widget.alarm.isEnabled) {
+      context.read<AlarmProvider>().toggleAlarm(widget.alarm);
+    }
+  }
+
   void _turnOff() async {
     _autoOffTimer?.cancel();
     await NotificationService.stopRingtone();
-
-    // Cancel all scheduled notifications for this alarm (base, days, snoozes, missed)
-    final baseId = NotificationService.stableId(widget.alarm.id);
-    await NotificationService.cancelAlarm(baseId);
-    for (int day = 1; day <= 7; day++) {
-      await NotificationService.cancelAlarm(NotificationService.stableId('${widget.alarm.id}_day$day'));
-    }
-    for (int s = 1; s <= 3; s++) {
-      await NotificationService.cancelAlarm(NotificationService.stableId('snooze_${widget.alarm.id}_$s'));
-    }
+    await _cancelPendingRings();
 
     if (mounted) {
-      // Toggle alarm off in provider if it was a one-time alarm
-      if (widget.alarm.daysOfWeek.isEmpty && widget.alarm.isEnabled) {
-        context.read<AlarmProvider>().toggleAlarm(widget.alarm);
-      }
+      _switchOffIfOneTime();
       Navigator.of(context, rootNavigator: true).pop();
     }
   }
@@ -92,6 +101,9 @@ class _AlarmRingingDialogState extends State<AlarmRingingDialog>
 
     _autoOffTimer?.cancel();
     await NotificationService.stopRingtone();
+
+    // The manual snooze replaces the automatic ones, so it rings only once.
+    await _cancelPendingRings();
 
     final nextCount = widget.snoozeCount + 1;
     final snoozeTime = DateTime.now().add(const Duration(minutes: 5));
@@ -104,6 +116,7 @@ class _AlarmRingingDialogState extends State<AlarmRingingDialog>
       dateTime: snoozeTime,
       body: 'Snooze $nextCount of 3 ringing!',
       initialSnoozeCount: nextCount,
+      alarmKey: widget.alarm.id,
     );
 
     if (mounted) {
@@ -123,30 +136,19 @@ class _AlarmRingingDialogState extends State<AlarmRingingDialog>
 
   void _dismissAndMarkMissed() async {
     await NotificationService.stopRingtone();
-
-    // Cancel scheduled notifications for this alarm
-    final baseId = NotificationService.stableId(widget.alarm.id);
-    await NotificationService.cancelAlarm(baseId);
-    for (int day = 1; day <= 7; day++) {
-      await NotificationService.cancelAlarm(NotificationService.stableId('${widget.alarm.id}_day$day'));
-    }
-    for (int s = 1; s <= 3; s++) {
-      await NotificationService.cancelAlarm(NotificationService.stableId('snooze_${widget.alarm.id}_$s'));
-    }
+    await _cancelPendingRings();
 
     final timeStr =
         '${widget.alarm.hour.toString().padLeft(2, '0')}:${widget.alarm.minute.toString().padLeft(2, '0')}';
 
     await NotificationService.sendMissedAlarmNotification(
-      id: baseId,
+      id: NotificationService.stableId(widget.alarm.id),
       title: widget.alarm.label.isNotEmpty ? widget.alarm.label : 'Alarm',
       timeStr: timeStr,
     );
 
     if (mounted) {
-      if (widget.alarm.daysOfWeek.isEmpty && widget.alarm.isEnabled) {
-        context.read<AlarmProvider>().toggleAlarm(widget.alarm);
-      }
+      _switchOffIfOneTime();
       Navigator.of(context, rootNavigator: true).pop();
     }
   }

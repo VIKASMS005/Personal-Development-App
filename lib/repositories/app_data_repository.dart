@@ -86,8 +86,23 @@ class AppDataRepository {
     final p = _screenTime;
     if (p == null) return {};
 
+    // Without usage access, after a failed read, or before the first load there
+    // is no real reading: say so instead of reporting "0m".
+    if (!p.hasPermission || p.readFailed || p.todaySummary == null) {
+      return {
+        'available': false,
+        'note': !p.hasPermission
+            ? 'Screen time is unavailable: usage access is not granted.'
+            : 'Screen time is unavailable: it could not be read.',
+      };
+    }
+
     final today = p.todaySummary;
-    final weeklySummaries = p.weeklySummaries;
+    final todayDate = DateTime.now();
+    final todayKey =
+        '${todayDate.year.toString().padLeft(4, '0')}-${todayDate.month.toString().padLeft(2, '0')}-${todayDate.day.toString().padLeft(2, '0')}';
+    // Future days of the week have no usage yet; leave them out.
+    final weeklySummaries = p.weeklySummaries.where((s) => s.date.compareTo(todayKey) <= 0).toList();
 
     // Top apps across the entire week
     final Map<String, int> weeklyAppMinutes = {};

@@ -30,6 +30,8 @@ class AuthProvider extends ChangeNotifier {
     final currentUid = _uid ?? _defaultUid;
     // 1. Cancel all active local notifications and alarms
     await NotificationService.cancelAll();
+    // The daily digest isn't user data; bring it back after the wipe.
+    await NotificationService.scheduleDailyDigest();
 
     // 2. Clear all local storage records for this user from SQLite
     await DatabaseService.instance.clearLocalUserData(currentUid);

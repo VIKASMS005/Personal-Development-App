@@ -59,7 +59,7 @@ class _TodoFormState extends State<TodoForm> {
     _titleC = TextEditingController(text: t?.title ?? '');
     _descC = TextEditingController(text: t?.description ?? '');
     _category = t?.category ?? 'General';
-    _priority = t?.priority ?? 4;
+    _priority = (t?.priority ?? 4).clamp(1, 4);
     _due = t?.dueDate;
     if (t?.dueDate != null) {
       final d = t!.dueDate!;
@@ -97,6 +97,14 @@ class _TodoFormState extends State<TodoForm> {
         _reminderTime!.hour,
         _reminderTime!.minute,
       );
+      // A new or changed reminder must be in the future, or it never rings.
+      if (fullReminder != widget.initial?.reminderDateTime &&
+          !fullReminder.isAfter(DateTime.now())) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Pick a reminder time in the future')),
+        );
+        return;
+      }
     }
 
     final initialType = widget.initial?.type;
@@ -188,7 +196,13 @@ class _TodoFormState extends State<TodoForm> {
               decoration: const InputDecoration(
                 prefixIcon: Icon(Icons.category_rounded),
               ),
-              items: _categoryOptions.map((c) {
+              // Keep an unknown category (e.g. from an AI-made task) as an
+              // item, or the dropdown asserts.
+              items: [
+                ..._categoryOptions,
+                if (!_categoryOptions.any((c) => c.$1 == _category))
+                  (_category, Icons.category_rounded),
+              ].map((c) {
                 return DropdownMenuItem(
                   value: c.$1,
                   child: Row(
@@ -251,7 +265,11 @@ class _TodoFormState extends State<TodoForm> {
                     onTap: () async {
                       // The range must contain the current due date, or the
                       // picker fails when editing a task due long ago.
-                      final earliest = DateTime.now().subtract(const Duration(days: 30));
+                      // A new task can't start out already overdue.
+                      final now = DateTime.now();
+                      final earliest = widget.initial == null
+                          ? DateTime(now.year, now.month, now.day)
+                          : now.subtract(const Duration(days: 30));
                       final first = _due != null && _due!.isBefore(earliest) ? _due! : earliest;
                       final d = await showDatePicker(
                         context: context,

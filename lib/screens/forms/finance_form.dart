@@ -163,9 +163,12 @@ class _FinanceFormState extends State<FinanceForm> {
                 hintText: '0.00',
                 prefixIcon: Icon(Icons.currency_rupee_rounded),
               ),
-              validator: (v) => (v == null || v.trim().isEmpty || double.tryParse(v.trim()) == null)
-                  ? 'Enter a valid amount'
-                  : null,
+              validator: (v) {
+                final amount = double.tryParse(v?.trim() ?? '');
+                return (amount == null || !amount.isFinite || amount <= 0)
+                    ? 'Enter an amount above 0'
+                    : null;
+              },
             ),
             const SizedBox(height: 14),
             DropdownButtonFormField<String>(
@@ -174,7 +177,9 @@ class _FinanceFormState extends State<FinanceForm> {
                 labelText: 'Category',
                 prefixIcon: Icon(Icons.category_rounded),
               ),
-              items: _categories
+              // An imported or older transaction may use a category that
+              // isn't in the list; the dropdown asserts unless it's an item.
+              items: [..._categories, if (!_categories.contains(_category)) _category]
                   .map((c) => DropdownMenuItem(value: c, child: Text(c)))
                   .toList(),
               onChanged: (v) => setState(() => _category = v ?? 'General'),
@@ -187,13 +192,18 @@ class _FinanceFormState extends State<FinanceForm> {
                 // A transaction records money already spent or received, so
                 // it can't be dated in the future.
                 final now = DateTime.now();
+                final first = _date.isBefore(DateTime(2020)) ? _date : DateTime(2020);
                 final d = await showDatePicker(
                   context: context,
                   initialDate: _date.isAfter(now) ? now : _date,
-                  firstDate: DateTime(2020),
+                  firstDate: first,
                   lastDate: now,
                 );
-                if (d != null) setState(() => _date = d);
+                if (d == null) return;
+                // Keep the original time of day, but never past "now".
+                var picked = DateTime(d.year, d.month, d.day, _date.hour, _date.minute, _date.second);
+                if (picked.isAfter(now)) picked = now;
+                setState(() => _date = picked);
               },
             ),
             const SizedBox(height: 24),

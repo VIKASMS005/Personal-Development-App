@@ -46,6 +46,7 @@ class _HabitFormState extends State<HabitForm> {
       frequency: _freq,
       history: widget.initial?.history,
       streak: widget.initial?.streak ?? 0,
+      createdAt: widget.initial?.createdAt,
       updatedAt: DateTime.now(),
     );
     Navigator.pop(context, h);

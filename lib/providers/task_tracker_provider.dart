@@ -168,8 +168,9 @@ class TaskTrackerProvider extends ChangeNotifier {
   }
 
   /// Ends the session and saves it as history, one record per day it ran on.
-  Future<void> finish(BuildContext context) async {
-    if (!_isTracking || _activeTodo == null) return;
+  /// Returns false when nothing was saved (too short, or the task is gone).
+  Future<bool> finish(BuildContext context) async {
+    if (!_isTracking || _activeTodo == null) return false;
 
     final now = DateTime.now();
     final segments = [
@@ -179,23 +180,29 @@ class TaskTrackerProvider extends ChangeNotifier {
     final todoProvider = context.read<TodoProvider>();
     // Use the task as it is now (it may have been renamed while the timer ran).
     final active = _activeTodo!;
-    final todo = todoProvider.todos
-        .firstWhere((t) => t.id == active.id, orElse: () => active);
+    final matches = todoProvider.todos.where((t) => t.id == active.id);
 
     _reset();
 
     final total = segments.fold<int>(0, (sum, s) => sum + s.seconds);
-    if (total <= minSessionSeconds) return;
+    if (total <= minSessionSeconds || matches.isEmpty) return false;
+    final todo = matches.first;
 
     final sessions = buildDailySessions(todo: todo, segments: segments, savedAt: now);
     for (final session in sessions) {
       await _db.insertTaskSession(session);
     }
     await todoProvider.recordSessions(todo.id, sessions);
+    return true;
   }
 
   /// Discards the current session without saving anything.
   void cancel() => _reset();
+
+  /// Stops (without saving) if [todoId] is the task being timed.
+  void cancelIfTracking(String todoId) {
+    if (_isTracking && _activeTodo?.id == todoId) cancel();
+  }
 
   void _reset() {
     _tickerTimer?.cancel();

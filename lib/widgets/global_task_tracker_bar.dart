@@ -87,11 +87,11 @@ class GlobalTaskTrackerBar extends StatelessWidget {
                 tooltip: 'End and save',
                 onPressed: () async {
                   final messenger = ScaffoldMessenger.of(context);
-                  await tracker.finish(context);
+                  final saved = await tracker.finish(context);
                   messenger
                     ..clearSnackBars()
-                    ..showSnackBar(const SnackBar(
-                      content: Text('Session saved'),
+                    ..showSnackBar(SnackBar(
+                      content: Text(saved ? 'Session saved' : 'Too short to save'),
                       duration: Duration(seconds: 2),
                     ));
                 },

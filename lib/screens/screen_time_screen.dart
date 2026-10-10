@@ -6,7 +6,6 @@ import '../utils/month_weeks.dart';
 import '../utils/app_colors.dart';
 import '../providers/app_providers.dart';
 import '../models/screen_time_record.dart';
-import '../services/screen_time_service.dart';
 
 class ScreenTimeScreen extends StatefulWidget {
   const ScreenTimeScreen({super.key});
@@ -54,6 +53,10 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
     });
   }
 
+  /// Bumped by every load; a slower, older load that finishes later is
+  /// dropped instead of overwriting the tab the user is now looking at.
+  int _loadToken = 0;
+
   void _loadCurrentTab() {
     if (_selectedPeriod == 0) {
       _loadDayData(_selectedDate);
@@ -67,31 +70,24 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
   }
 
   Future<void> _loadDayData(DateTime date) async {
+    final token = ++_loadToken;
     setState(() => _isLoadingDay = true);
-    final errorsBefore = ScreenTimeService.instance.readErrorCount;
-    final isToday = date.year == DateTime.now().year &&
-        date.month == DateTime.now().month &&
-        date.day == DateTime.now().day;
-    final start = DateTime(date.year, date.month, date.day);
-    final end = isToday ? DateTime.now() : DateTime(date.year, date.month, date.day, 23, 59, 59);
+    final prov = context.read<ScreenTimeProvider>();
+    final errorsBefore = prov.readErrorCount;
+    final summary = await prov.getDay(date);
 
-    final summary = await ScreenTimeService.instance.getSummaryForRange(
-      startDate: start,
-      endDate: end,
-      dateLabel: DateFormat('yyyy-MM-dd').format(date),
-    );
-
-    if (mounted) {
+    if (mounted && token == _loadToken) {
       setState(() {
         _dayApps = summary.appUsages;
         _dayTotal = summary.totalDuration;
         _isLoadingDay = false;
-        _tabReadFailed = ScreenTimeService.instance.readErrorCount > errorsBefore;
+        _tabReadFailed = prov.readErrorCount > errorsBefore;
       });
     }
   }
 
   Future<void> _loadWeekData(DateTime date) async {
+    final token = ++_loadToken;
     setState(() => _isLoadingWeek = true);
     final prov = context.read<ScreenTimeProvider>();
     final errorsBefore = prov.readErrorCount;
@@ -102,7 +98,7 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
       total += s.totalDuration;
     }
 
-    if (mounted) {
+    if (mounted && token == _loadToken) {
       setState(() {
         _weekSummaries = summaries;
         _weekTotal = total;
@@ -113,6 +109,7 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
   }
 
   Future<void> _loadMonthData(int year, int month) async {
+    final token = ++_loadToken;
     setState(() => _isLoadingMonth = true);
     final prov = context.read<ScreenTimeProvider>();
     final errorsBefore = prov.readErrorCount;
@@ -123,7 +120,7 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
       total += w.totalDuration;
     }
 
-    if (mounted) {
+    if (mounted && token == _loadToken) {
       setState(() {
         _monthWeeks = weeks;
         _monthTotal = total;
@@ -134,6 +131,7 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
   }
 
   Future<void> _loadYearData(int year) async {
+    final token = ++_loadToken;
     setState(() => _isLoadingYear = true);
     final prov = context.read<ScreenTimeProvider>();
     final errorsBefore = prov.readErrorCount;
@@ -144,7 +142,7 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
       total += m.totalDuration;
     }
 
-    if (mounted) {
+    if (mounted && token == _loadToken) {
       setState(() {
         _yearMonths = months;
         _yearTotal = total;

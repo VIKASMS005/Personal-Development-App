@@ -256,9 +256,14 @@ class TaskAnalytics {
               .inDays +
           1;
       var prevEnd = DateTime(prevRange.start.year, prevRange.start.month, prevRange.start.day + days);
-      if (prevEnd.isAfter(prevRange.end)) prevEnd = prevRange.end;
+      if (prevEnd.isAfter(prevRange.end)) {
+        // The previous period is shorter than the days elapsed so far (e.g.
+        // a 3-day month-end week), so all of it is compared, not N days.
+        prevEnd = prevRange.end;
+      } else {
+        comparedDays = days;
+      }
       prevRange = DateRange(prevRange.start, prevEnd);
-      comparedDays = days;
     }
 
     int days(DateRange r) => (r.end.difference(r.start).inHours / 24).round();

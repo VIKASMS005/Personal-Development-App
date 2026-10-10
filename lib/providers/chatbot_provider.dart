@@ -176,12 +176,12 @@ class ChatbotProvider extends ChangeNotifier {
         final slots = (data['slots'] as List).map((s) {
           return {
             'uid': uid,
-            'day_of_week': s['dayOfWeek'] ?? 'Daily',
-            'start_time': s['startTime'] ?? '08:00 AM',
-            'end_time': s['endTime'] ?? '09:00 AM',
+            'dayOfWeek': s['dayOfWeek'] ?? 'Daily',
+            'startTime': s['startTime'] ?? '08:00 AM',
+            'endTime': s['endTime'] ?? '09:00 AM',
             'title': s['title'] ?? 'Activity',
             'category': s['category'] ?? 'Personal',
-            'color_hex': _categoryColor(s['category']?.toString() ?? ''),
+            'colorHex': _categoryColor(s['category']?.toString() ?? ''),
           };
         }).toList();
         return jsonEncode(slots);
@@ -221,13 +221,28 @@ class ChatbotProvider extends ChangeNotifier {
 
   // ─── Action Apply Methods ─────────────────────────────────────────────────
 
+  /// Plans saved by older versions used snake_case keys, which fromMap
+  /// ignores (every slot became Daily 08:00-09:00).
+  static Map<String, dynamic> _camelSlotKeys(Map<String, dynamic> m) {
+    const keys = {
+      'day_of_week': 'dayOfWeek',
+      'start_time': 'startTime',
+      'end_time': 'endTime',
+      'color_hex': 'colorHex',
+    };
+    keys.forEach((snake, camel) {
+      if (m.containsKey(snake) && !m.containsKey(camel)) m[camel] = m[snake];
+    });
+    return m;
+  }
+
   Future<void> applyTimetableAction(
       ChatMessage msg, TimetableProvider timetableProvider) async {
     if (msg.actionData == null || msg.isApplied) return;
     try {
       final List<dynamic> raw = jsonDecode(msg.actionData!);
       final slots = raw
-          .map((m) => TimetableSlot.fromMap(Map<String, dynamic>.from(m)))
+          .map((m) => TimetableSlot.fromMap(_camelSlotKeys(Map<String, dynamic>.from(m))))
           .toList();
       await timetableProvider.addMultipleSlots(slots);
       await _db.markChatActionApplied(msg.id);

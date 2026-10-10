@@ -110,6 +110,15 @@ class _ReminderFormState extends State<ReminderForm> {
       _selectedTime.hour,
       _selectedTime.minute,
     );
+    if (!mounted) return;
+    // A new or moved reminder must be in the future, or it never rings.
+    if (fullDateTime != widget.initialReminder?.dateTime &&
+        !fullDateTime.isAfter(DateTime.now())) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Pick a time in the future')),
+      );
+      return;
+    }
 
     final reminder = Reminder(
       id: widget.initialReminder?.id,

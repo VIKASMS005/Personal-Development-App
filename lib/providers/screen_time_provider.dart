@@ -175,9 +175,12 @@ class ScreenTimeProvider extends ChangeNotifier {
     if (!Platform.isAndroid) return;
 
     final errorsBefore = _service.readErrorCount;
+    // The quick path is only safe while Usage Access is unchanged; a grant or
+    // revoke made in Settings needs the full load.
     if (isResume &&
         _weeklySummaries.isNotEmpty &&
-        _prevWeeklySummaries.isNotEmpty) {
+        _prevWeeklySummaries.isNotEmpty &&
+        await _service.hasPermission() == _hasPermission) {
       try {
         final todayStr = DateTime.now().toIso8601String().split('T')[0];
         final now = DateTime.now();
@@ -266,6 +269,20 @@ class ScreenTimeProvider extends ChangeNotifier {
 
     _isLoading = false;
     notifyListeners();
+  }
+
+  /// One day's usage, merged with what was saved for it (same rule as the
+  /// week, month and year views, so the Daily tab agrees with them).
+  Future<DailyScreenTimeSummary> getDay(DateTime date) {
+    final now = DateTime.now();
+    final start = DateTime(date.year, date.month, date.day);
+    final isToday = start == DateTime(now.year, now.month, now.day);
+    return _summaryForRange(
+      uid: 'local_user',
+      startDate: start,
+      endDate: isToday ? now : DateTime(date.year, date.month, date.day, 23, 59, 59),
+      dateLabel: _dateKey(start),
+    );
   }
 
   /// Query every day of the (month-bound) week containing [anyDateInWeek].

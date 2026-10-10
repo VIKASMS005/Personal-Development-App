@@ -16,6 +16,19 @@ class HabitEngine {
 
   static String _dateStr(DateTime d) => d.toIso8601String().split('T')[0];
 
+  /// The day [h] was added, or null when unknown (older habits).
+  static DateTime? _createdDay(Habit h) {
+    final c = h.createdAt;
+    return c == null ? null : DateTime(c.year, c.month, c.day);
+  }
+
+  /// True if [h] already existed on [day]; days before a habit was added
+  /// are not counted as missed.
+  static bool existedOn(Habit h, DateTime day) {
+    final c = _createdDay(h);
+    return c == null || !DateTime(day.year, day.month, day.day).isBefore(c);
+  }
+
   // ─── Per-Habit Calculations ────────────────────────────────────────────────
 
   /// True if this habit is done for its current period: today for a daily
@@ -38,9 +51,11 @@ class HabitEngine {
   double completionRateThisWeek(Habit h) {
     final now = DateTime.now();
     if (h.isWeekly) return h.isDoneInPeriodOf(now) ? 1.0 : 0.0;
-    final weekStart = monthWeekOf(now).start;
+    var weekStart = monthWeekOf(now).start;
+    final created = _createdDay(h);
+    if (created != null && created.isAfter(weekStart)) weekStart = created;
     final daysElapsed = now.day - weekStart.day + 1;
-    if (daysElapsed == 0) return 0.0;
+    if (daysElapsed <= 0) return 0.0;
     int done = 0;
     for (int i = 0; i < daysElapsed; i++) {
       final d = DateTime(weekStart.year, weekStart.month, weekStart.day + i);
@@ -53,11 +68,13 @@ class HabitEngine {
   double completionRateLastWeek(Habit h) {
     final prev = previousMonthWeek(monthWeekOf(DateTime.now()));
     if (h.isWeekly) return h.isDoneInPeriodOf(prev.start) ? 1.0 : 0.0;
-    int done = 0;
+    int done = 0, counted = 0;
     for (final d in prev.days) {
+      if (!existedOn(h, d)) continue;
+      counted++;
       if (h.history[_dateStr(d)] == true) done++;
     }
-    return done / prev.length;
+    return counted == 0 ? 0.0 : done / counted;
   }
 
   /// Current streak for [h] counting consecutive days ending today (or yesterday).
@@ -80,7 +97,8 @@ class HabitEngine {
       }
       final d = DateTime.tryParse(ds);
       if (d == null) continue;
-      if (prev == null || d.difference(prev).inDays == 1) {
+      // Calendar-day step (DST-safe): compare with the day after prev.
+      if (prev == null || d == DateTime(prev.year, prev.month, prev.day + 1)) {
         current++;
       } else {
         current = 1;
@@ -116,7 +134,12 @@ class HabitEngine {
 
   /// Number of days missed in last [lookbackDays].
   int missedDays(Habit h, {int lookbackDays = 7}) {
-    return lookbackDays - completedDaysIn(h, lookbackDays: lookbackDays);
+    final now = DateTime.now();
+    var existing = 0;
+    for (int i = 0; i < lookbackDays; i++) {
+      if (existedOn(h, DateTime(now.year, now.month, now.day - i))) existing++;
+    }
+    return existing - completedDaysIn(h, lookbackDays: lookbackDays);
   }
 
   // ─── Aggregate Calculations ────────────────────────────────────────────────
@@ -130,8 +153,13 @@ class HabitEngine {
 
   /// Overall previous week completion rate across all habits.
   double overallPreviousWeekRate() {
-    if (habits.isEmpty) return 0.0;
-    final rates = habits.map(completionRateLastWeek).toList();
+    // Habits added after last week ended have no last week to compare.
+    final prevLast = previousMonthWeek(monthWeekOf(DateTime.now())).last;
+    final rates = habits
+        .where((h) => existedOn(h, prevLast))
+        .map(completionRateLastWeek)
+        .toList();
+    if (rates.isEmpty) return 0.0;
     return rates.reduce((a, b) => a + b) / rates.length;
   }
 
@@ -157,7 +185,14 @@ class HabitEngine {
   /// Habits that have been missed for 2+ consecutive days (at risk), or for a
   /// weekly habit, missed last week and not yet done this week.
   List<Habit> habitsAtRisk() {
+    final n0 = DateTime.now();
     return habits.where((h) {
+      // Too new to have missed anything yet.
+      if (h.isWeekly) {
+        if (!existedOn(h, previousMonthWeek(monthWeekOf(n0)).last)) return false;
+      } else if (!existedOn(h, DateTime(n0.year, n0.month, n0.day - 1))) {
+        return false;
+      }
       if (h.isWeekly) {
         final week = monthWeekOf(DateTime.now());
         return !h.isDoneInPeriodOf(week.start) &&
