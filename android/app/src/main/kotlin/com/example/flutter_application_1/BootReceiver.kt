@@ -24,6 +24,7 @@ class BootReceiver : BroadcastReceiver() {
             StepBackgroundManager.schedulePeriodicSync(context)
             StepBackgroundManager.scheduleMidnightAlarm(context)
             StepTrackingService.start(context)
+            TaskTimerService.restoreIfActive(context)
         }
     }
 }

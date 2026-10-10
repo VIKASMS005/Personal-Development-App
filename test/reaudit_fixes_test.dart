@@ -1,4 +1,8 @@
+import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:grow_personal_dev/models/todo.dart';
+import 'package:grow_personal_dev/providers/task_tracker_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:grow_personal_dev/engine/habit_engine.dart';
 import 'package:grow_personal_dev/models/habit.dart';
 import 'package:grow_personal_dev/services/notification_service.dart';
@@ -72,5 +76,34 @@ void main() {
       '2026-04-02': true,
     });
     expect(HabitEngine([h]).longestStreak(h), 4);
+  });
+
+  // Presses made on the timer notification are replayed at the moment they
+  // happened, so a pause pressed while the app was closed counts exactly.
+  testWidgets('notification Pause and Resume are applied at their times', (tester) async {
+    final now = DateTime.now();
+    SharedPreferences.setMockInitialValues({
+      'grow_active_task_timer_v1': jsonEncode({
+        'todo': Todo(title: 'Study').toMap(),
+        'segments': [],
+        'runningSince': now.subtract(const Duration(minutes: 10)).toIso8601String(),
+        'pausedAt': null,
+      }),
+    });
+    final tracker = TaskTrackerProvider();
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    expect(tracker.isTracking, isTrue);
+
+    tracker.applyNotificationEvent('pause', now.subtract(const Duration(minutes: 6)));
+    expect(tracker.isPaused, isTrue);
+    expect(tracker.currentElapsedSeconds, 240);
+
+    tracker.applyNotificationEvent('pause', now); // already paused: ignored
+    expect(tracker.currentElapsedSeconds, 240);
+
+    tracker.applyNotificationEvent('resume', now.subtract(const Duration(minutes: 1)));
+    expect(tracker.isPaused, isFalse);
+    expect(tracker.currentElapsedSeconds, inInclusiveRange(300, 301));
+    tracker.dispose();
   });
 }

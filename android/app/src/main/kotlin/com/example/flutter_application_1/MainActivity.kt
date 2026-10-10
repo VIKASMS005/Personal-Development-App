@@ -55,6 +55,24 @@ class MainActivity : FlutterFragmentActivity() {
                 when (call.method) {
 
                     // ── Settings navigation ──────────────────────────────────
+                    // ── Task timer notification ─────────────────────────────
+                    "syncTaskTimer" -> {
+                        TaskTimerService.sync(
+                            this,
+                            call.argument<String>("title") ?: "Task timer",
+                            (call.argument<Number>("doneMs") ?: 0).toLong(),
+                            (call.argument<Number>("runningSinceMs") ?: 0).toLong()
+                        )
+                        result.success(true)
+                    }
+                    "stopTaskTimer" -> {
+                        TaskTimerService.stop(this)
+                        result.success(true)
+                    }
+                    "drainTaskTimerEvents" -> {
+                        result.success(TaskTimerService.drainEvents(this))
+                    }
+
                     "openUsageAccessSettings" -> {
                         startActivity(
                             Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)

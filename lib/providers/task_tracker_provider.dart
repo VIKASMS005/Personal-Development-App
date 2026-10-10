@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/todo.dart';
@@ -67,6 +69,13 @@ class TaskTrackerProvider extends ChangeNotifier {
   final DatabaseService _db = DatabaseService.instance;
 
   static const _prefsKey = 'grow_active_task_timer_v1';
+  static const _channel = MethodChannel('com.grow.app/settings');
+
+  /// Set by the home screen once tasks are loaded; needed to save sessions
+  /// for presses made on the timer notification.
+  TodoProvider? _todoProvider;
+  Timer? _notificationPoll;
+  bool _applyingNotification = false;
 
   TaskTrackerProvider() {
     _restore();
@@ -169,15 +178,17 @@ class TaskTrackerProvider extends ChangeNotifier {
 
   /// Ends the session and saves it as history, one record per day it ran on.
   /// Returns false when nothing was saved (too short, or the task is gone).
-  Future<bool> finish(BuildContext context) async {
+  Future<bool> finish(BuildContext context) =>
+      _finishAt(DateTime.now(), context.read<TodoProvider>());
+
+  Future<bool> _finishAt(DateTime now, TodoProvider todoProvider) async {
     if (!_isTracking || _activeTodo == null) return false;
 
-    final now = DateTime.now();
     final segments = [
       ..._segments,
-      if (_runningSince != null) TimerSegment(_runningSince!, now),
+      if (_runningSince != null && now.isAfter(_runningSince!))
+        TimerSegment(_runningSince!, now),
     ];
-    final todoProvider = context.read<TodoProvider>();
     // Use the task as it is now (it may have been renamed while the timer ran).
     final active = _activeTodo!;
     final matches = todoProvider.todos.where((t) => t.id == active.id);
@@ -240,6 +251,94 @@ class TaskTrackerProvider extends ChangeNotifier {
     } catch (e) {
       debugPrint('[TaskTracker] could not save timer state: $e');
     }
+    await _syncNotification();
+  }
+
+  // ── Timer notification (Android) ────────────────────────────────────────────
+
+  /// Mirrors the timer into the notification, or removes it when it ended.
+  Future<void> _syncNotification() async {
+    if (!Platform.isAndroid) return;
+    try {
+      final todo = _activeTodo;
+      if (!_isTracking || todo == null) {
+        await _channel.invokeMethod('stopTaskTimer');
+        return;
+      }
+      final doneMs = _segments.fold<int>(
+          0, (sum, s) => sum + s.end.difference(s.start).inMilliseconds);
+      await _channel.invokeMethod('syncTaskTimer', {
+        'title': todo.title,
+        'doneMs': doneMs,
+        'runningSinceMs': _runningSince?.millisecondsSinceEpoch ?? 0,
+      });
+    } catch (e) {
+      debugPrint('[TaskTracker] could not update the timer notification: $e');
+    }
+  }
+
+  /// Starts applying presses made on the notification (now, every couple of
+  /// seconds while the app is open, and on [syncFromNotification]).
+  void attach(TodoProvider todoProvider) {
+    _todoProvider = todoProvider;
+    _notificationPoll?.cancel();
+    _notificationPoll = Timer.periodic(const Duration(seconds: 2), (_) {
+      if (_isTracking) syncFromNotification();
+    });
+    syncFromNotification(resync: true);
+  }
+
+  /// Replays Pause/Resume/End pressed on the notification, at the moments
+  /// they were pressed (even while the app was closed). With [resync] (app
+  /// opened or brought back) the notification is re-shown from the app's
+  /// state even when nothing was pressed, e.g. after an update.
+  Future<void> syncFromNotification({bool resync = false}) async {
+    final todoProvider = _todoProvider;
+    if (!Platform.isAndroid || todoProvider == null || _applyingNotification) return;
+    _applyingNotification = true;
+    try {
+      final raw = await _channel.invokeMethod<List<dynamic>>('drainTaskTimerEvents') ?? const [];
+      final events = [
+        for (final e in raw)
+          if (e is Map)
+            (
+              action: '${e['action']}',
+              at: DateTime.fromMillisecondsSinceEpoch((e['atMs'] as num).toInt()),
+            )
+      ]..sort((a, b) => a.at.compareTo(b.at));
+      for (final e in events) {
+        applyNotificationEvent(e.action, e.at);
+        if (e.action == 'end') await _finishAt(e.at, todoProvider);
+      }
+      if (events.isNotEmpty) {
+        await _persist();
+        notifyListeners();
+      } else if (resync) {
+        await _syncNotification();
+      }
+    } catch (e) {
+      debugPrint('[TaskTracker] could not read timer notification presses: $e');
+    } finally {
+      _applyingNotification = false;
+    }
+  }
+
+  /// Applies a Pause or Resume pressed at [at] (End is saved by the caller).
+  @visibleForTesting
+  void applyNotificationEvent(String action, DateTime at) {
+    if (!_isTracking) return;
+    if (action == 'pause' && _runningSince != null) {
+      if (at.isAfter(_runningSince!)) _segments.add(TimerSegment(_runningSince!, at));
+      _runningSince = null;
+      _pausedAt = at;
+      _isPaused = true;
+      _tickerTimer?.cancel();
+    } else if (action == 'resume' && _isPaused) {
+      _isPaused = false;
+      _pausedAt = null;
+      _runningSince = at;
+      _startTicker();
+    }
   }
 
   /// Brings back a timer that was running or paused when the app was closed.
@@ -288,6 +387,7 @@ class TaskTrackerProvider extends ChangeNotifier {
   @override
   void dispose() {
     _tickerTimer?.cancel();
+    _notificationPoll?.cancel();
     super.dispose();
   }
 }

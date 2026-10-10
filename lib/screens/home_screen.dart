@@ -99,6 +99,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       StepTrackerService.instance.reinit();
       context.read<StepProvider>().refreshStepData(uid);
       context.read<ScreenTimeProvider>().loadScreenTime(isResume: true);
+      context.read<TaskTrackerProvider>().syncFromNotification(resync: true);
       _rebuildEngine();
     }
   }
@@ -209,6 +210,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       context.read<StepProvider>().loadStepData(uid),
     ]);
     if (!mounted) return;
+    // Tasks are loaded, so presses on the timer notification can be saved.
+    context.read<TaskTrackerProvider>().attach(context.read<TodoProvider>());
     context.read<ScreenTimeProvider>().loadScreenTime();
     // Rebuild the Personal Development Engine with fresh data
     _rebuildEngine();
